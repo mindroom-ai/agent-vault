@@ -32,8 +32,11 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/http/httpproxy"
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/ca"
@@ -81,6 +84,7 @@ type Options struct {
 // listening until ListenAndServe is called.
 func New(addr string, opts Options) *Proxy {
 	upstream := &http.Transport{
+		Proxy:                 upstreamProxyFromEnvironment(),
 		DialContext:           netguard.SafeDialContext(netguard.AllowPrivateFromEnv()),
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		ForceAttemptHTTP2:     false,
@@ -183,4 +187,30 @@ func (p *Proxy) dispatch(w http.ResponseWriter, r *http.Request) {
 	// covers every legitimate forward-proxy shape; anything else is a
 	// malformed request, not a method-not-allowed.
 	http.Error(w, "this endpoint is an HTTP forward proxy; non-CONNECT requests must use absolute-form URLs (http://host/path). Use CONNECT for https:// upstreams.", http.StatusBadRequest)
+}
+
+// upstreamProxyFromEnvironment returns a Transport.Proxy function honoring
+// HTTP_PROXY, HTTPS_PROXY, and NO_PROXY (or their lowercase variants) for
+// the proxy's own outbound calls, or nil when none are set so the direct
+// path stays unchanged. Deployments that fence this proxy's egress (e.g. a
+// Kubernetes NetworkPolicy admitting only a corporate allowlist proxy)
+// set these variables so MITM'd traffic chains through that proxy instead
+// of dialing upstreams directly.
+//
+// The environment is read once at construction, matching the lifetime of
+// the Transport it configures; http.ProxyFromEnvironment is avoided
+// because it caches process-wide on first use, which surprises tests and
+// long-lived embedders. Note SafeDialContext still vets the dialed
+// address — with a proxy configured that address is the proxy itself, so
+// a proxy on a private address needs AGENT_VAULT_ALLOW_PRIVATE_RANGES or
+// AGENT_VAULT_NETWORK_ALLOWLIST to cover it.
+func upstreamProxyFromEnvironment() func(*http.Request) (*url.URL, error) {
+	cfg := httpproxy.FromEnvironment()
+	if cfg.HTTPProxy == "" && cfg.HTTPSProxy == "" {
+		return nil
+	}
+	proxyFunc := cfg.ProxyFunc()
+	return func(req *http.Request) (*url.URL, error) {
+		return proxyFunc(req.URL)
+	}
 }

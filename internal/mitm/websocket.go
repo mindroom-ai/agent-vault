@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -164,7 +166,7 @@ func (p *Proxy) dialWebSocketUpstream(
 		dialCtx = dialer.DialContext
 	}
 
-	rawConn, err := dialCtx(ctx, "tcp", outReq.URL.Host)
+	rawConn, err := p.dialUpstreamConn(ctx, dialCtx, outReq)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -557,4 +559,88 @@ func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn
 			return
 		}
 	}
+}
+
+// dialUpstreamConn opens the TCP connection a WebSocket upgrade rides on.
+// With no egress proxy configured it dials the target directly; otherwise
+// it dials the proxy and issues a CONNECT for the target, mirroring what
+// Transport.Proxy already does for the request-forwarding paths. Without
+// this, configuring HTTPS_PROXY would chain plain requests but let
+// WebSocket upgrades slip past the egress proxy.
+func (p *Proxy) dialUpstreamConn(
+	ctx context.Context,
+	dialCtx func(context.Context, string, string) (net.Conn, error),
+	outReq *http.Request,
+) (net.Conn, error) {
+	if p.upstream.Proxy == nil {
+		return dialCtx(ctx, "tcp", outReq.URL.Host)
+	}
+	proxyURL, err := p.upstream.Proxy(outReq)
+	if err != nil {
+		return nil, err
+	}
+	if proxyURL == nil {
+		return dialCtx(ctx, "tcp", outReq.URL.Host)
+	}
+	return p.dialViaConnectProxy(ctx, dialCtx, proxyURL, outReq.URL.Host)
+}
+
+// dialViaConnectProxy dials proxyURL and establishes a CONNECT tunnel to
+// target (host:port). Only http:// proxies are supported — that covers
+// the corporate/cluster egress proxies this chaining exists for.
+func (p *Proxy) dialViaConnectProxy(
+	ctx context.Context,
+	dialCtx func(context.Context, string, string) (net.Conn, error),
+	proxyURL *url.URL,
+	target string,
+) (net.Conn, error) {
+	if proxyURL.Scheme != "http" {
+		return nil, fmt.Errorf("unsupported egress proxy scheme %q for WebSocket upstream (only http)", proxyURL.Scheme)
+	}
+	proxyAddr := proxyURL.Host
+	if proxyURL.Port() == "" {
+		proxyAddr = net.JoinHostPort(proxyURL.Hostname(), "80")
+	}
+
+	conn, err := dialCtx(ctx, "tcp", proxyAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	connectReq := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: target},
+		Host:   target,
+		Header: make(http.Header),
+	}
+	if u := proxyURL.User; u != nil {
+		pass, _ := u.Password()
+		auth := base64.StdEncoding.EncodeToString([]byte(u.Username() + ":" + pass))
+		connectReq.Header.Set("Proxy-Authorization", "Basic "+auth)
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(p.responseHeaderTimeout()))
+	if err := connectReq.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, connectReq)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		return nil, fmt.Errorf("egress proxy refused CONNECT to %s: %s", target, resp.Status)
+	}
+	if br.Buffered() > 0 {
+		// The tunnel must start clean; stray buffered bytes would corrupt
+		// the TLS handshake or upgrade exchange riding on it.
+		_ = conn.Close()
+		return nil, fmt.Errorf("egress proxy sent %d unexpected bytes after CONNECT", br.Buffered())
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }
