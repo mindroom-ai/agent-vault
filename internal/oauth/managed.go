@@ -30,7 +30,7 @@ type ManagedProvider struct {
 // user-supplied client credentials unexpectedly.
 func LoadManagedProvidersFromEnv() ([]ManagedProvider, error) {
 	googleClientID := strings.TrimSpace(os.Getenv(GoogleOAuthClientIDEnv))
-	googleClientSecret := os.Getenv(GoogleOAuthClientSecretEnv)
+	googleClientSecret := strings.TrimSpace(os.Getenv(GoogleOAuthClientSecretEnv))
 
 	if googleClientID == "" && googleClientSecret == "" {
 		return nil, nil

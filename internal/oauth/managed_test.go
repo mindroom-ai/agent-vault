@@ -21,7 +21,7 @@ func TestLoadManagedProvidersFromEnvDisabled(t *testing.T) {
 
 func TestLoadManagedProvidersFromEnvGoogle(t *testing.T) {
 	t.Setenv(GoogleOAuthClientIDEnv, " google-client-id ")
-	t.Setenv(GoogleOAuthClientSecretEnv, "google-client-secret")
+	t.Setenv(GoogleOAuthClientSecretEnv, " google-client-secret ")
 
 	providers, err := LoadManagedProvidersFromEnv()
 	if err != nil {
@@ -57,6 +57,8 @@ func TestLoadManagedProvidersFromEnvRejectsPartialConfig(t *testing.T) {
 	}{
 		{name: "missing secret", clientID: "google-client-id"},
 		{name: "missing client ID", clientSecret: "google-client-secret"},
+		{name: "whitespace secret", clientID: "google-client-id", clientSecret: " \t "},
+		{name: "whitespace client ID", clientID: " \t ", clientSecret: "google-client-secret"},
 	}
 
 	for _, tt := range tests {
