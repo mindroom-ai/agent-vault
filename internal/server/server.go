@@ -184,10 +184,11 @@ func (s *Server) SessionResolver() brokercore.SessionResolver {
 // this server's store and encryption key.
 func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 	p := &brokercore.StoreCredentialProvider{
-		Store:      credentialStoreAdapter{s.store},
-		OAuthStore: credentialStoreAdapter{s.store},
-		EncKey:     s.encKey,
-		Refresher:  s.oauthRefresher,
+		Store:        credentialStoreAdapter{s.store},
+		OAuthStore:   credentialStoreAdapter{s.store},
+		EncKey:       s.encKey,
+		Refresher:    s.oauthRefresher,
+		OAuthSecrets: managedOAuthClientSecretResolver{s},
 	}
 	// Late-bind via an adapter: the MITM proxy captures this provider at attach
 	// time, before Start() builds s.infisicalDynamic. The adapter reads the

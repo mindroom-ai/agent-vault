@@ -31,7 +31,7 @@ description: "Configuration for deploying an instance of Agent Vault."
 
 ## Managed OAuth providers
 
-An instance operator can configure a shared Google OAuth application. Vault users then choose **Google (managed)**, select scopes, and authorize their own Google account without creating or entering OAuth client credentials. Access and refresh tokens remain separate per vault.
+An instance operator can configure a shared Google OAuth application. Vault users then choose **Google (managed)**, select scopes, and authorize their own Google account without creating or entering OAuth client credentials. Access and refresh tokens remain separate per vault. The shared client secret is resolved from the current server configuration during authorization and refresh, so rotating it only requires restarting the server with the new value.
 
 Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` as an authorized redirect URI on the Google OAuth Web application. Both variables are required to enable the managed provider.
 

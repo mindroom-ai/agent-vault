@@ -214,14 +214,10 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var clientSecret string
-	if len(oauthCfg.ClientSecretCT) > 0 {
-		cs, err := crypto.Decrypt(oauthCfg.ClientSecretCT, oauthCfg.ClientSecretNonce, s.encKey)
-		if err != nil {
-			s.redirectOAuthComplete(w, r, "", "", "error", "Failed to decrypt client secret")
-			return
-		}
-		clientSecret = string(cs)
+	clientSecret, err := s.oauthClientSecret(oauthCfg)
+	if err != nil {
+		s.redirectOAuthComplete(w, r, "", "", "error", "Failed to decrypt client secret")
+		return
 	}
 
 	redirectURI := s.baseURL + "/v1/oauth/callback"
@@ -385,10 +381,10 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		// If the caller sends a different token_url, don't send stored secrets
 		// to the new endpoint (prevents client secret exfiltration).
 		providerUnchanged := tokenURL == existing.TokenURL
-		if clientSecret == "" && len(existing.ClientSecretCT) > 0 && providerUnchanged {
-			cs, err := crypto.Decrypt(existing.ClientSecretCT, existing.ClientSecretNonce, s.encKey)
-			if err == nil {
-				clientSecret = string(cs)
+		if clientSecret == "" && providerUnchanged {
+			resolvedSecret, resolveErr := s.oauthClientSecret(existing)
+			if resolveErr == nil {
+				clientSecret = resolvedSecret
 			}
 		}
 		if tokenAuthMethod == "" {
@@ -434,7 +430,8 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		}
 
 		var clientSecretCT, clientSecretNonce []byte
-		if clientSecret != "" {
+		_, managedProvider := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(existing)
+		if clientSecret != "" && !managedProvider {
 			clientSecretCT, clientSecretNonce, err = crypto.Encrypt([]byte(clientSecret), s.encKey)
 			if err != nil {
 				jsonError(w, http.StatusInternalServerError, "Encryption failed")

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/oauth"
+	"github.com/Infisical/agent-vault/internal/store"
 )
 
 // SetManagedOAuthProviders configures OAuth applications supplied by the
@@ -41,7 +43,9 @@ func (s *Server) applyManagedOAuthProvider(req *oauthConnectRequest) error {
 	req.AuthorizationURL = provider.AuthorizationURL
 	req.TokenURL = provider.TokenURL
 	req.ClientID = provider.ClientID
-	req.ClientSecret = provider.ClientSecret
+	// Never persist the shared secret in a vault credential. Callback and
+	// refresh paths resolve the current operator-managed value at runtime.
+	req.ClientSecret = ""
 	req.TokenAuthMethod = provider.TokenAuthMethod
 	return nil
 }
@@ -56,4 +60,35 @@ func (s *Server) managedOAuthProviderForConfig(authorizationURL, tokenURL, clien
 		}
 	}
 	return ""
+}
+
+type managedOAuthClientSecretResolver struct{ server *Server }
+
+func (r managedOAuthClientSecretResolver) ResolveOAuthClientSecret(config *store.CredentialOAuth) (string, bool) {
+	if config == nil {
+		return "", false
+	}
+	id := r.server.managedOAuthProviderForConfig(config.AuthorizationURL, config.TokenURL, config.ClientID)
+	if id == "" {
+		return "", false
+	}
+	provider, ok := r.server.managedOAuthProviders[id]
+	if !ok {
+		return "", false
+	}
+	return provider.ClientSecret, true
+}
+
+func (s *Server) oauthClientSecret(config *store.CredentialOAuth) (string, error) {
+	if secret, ok := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(config); ok {
+		return secret, nil
+	}
+	if len(config.ClientSecretCT) == 0 {
+		return "", nil
+	}
+	secret, err := crypto.Decrypt(config.ClientSecretCT, config.ClientSecretNonce, s.encKey)
+	if err != nil {
+		return "", err
+	}
+	return string(secret), nil
 }

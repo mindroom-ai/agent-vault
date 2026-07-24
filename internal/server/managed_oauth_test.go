@@ -3,7 +3,9 @@ package server
 import (
 	"testing"
 
+	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/oauth"
+	"github.com/Infisical/agent-vault/internal/store"
 )
 
 func testManagedGoogleProvider() oauth.ManagedProvider {
@@ -43,8 +45,8 @@ func TestApplyManagedOAuthProvider(t *testing.T) {
 	if req.ClientID != provider.ClientID {
 		t.Errorf("ClientID = %q, want %q", req.ClientID, provider.ClientID)
 	}
-	if req.ClientSecret != provider.ClientSecret {
-		t.Errorf("ClientSecret = %q, want managed secret", req.ClientSecret)
+	if req.ClientSecret != "" {
+		t.Errorf("ClientSecret = %q, want empty so it is not persisted", req.ClientSecret)
 	}
 	if req.TokenAuthMethod != provider.TokenAuthMethod {
 		t.Errorf("TokenAuthMethod = %q, want %q", req.TokenAuthMethod, provider.TokenAuthMethod)
@@ -83,5 +85,54 @@ func TestManagedOAuthProviderIDsSorted(t *testing.T) {
 	got := srv.managedOAuthProviderIDs()
 	if len(got) != 2 || got[0] != "github" || got[1] != "google" {
 		t.Fatalf("managedOAuthProviderIDs = %v, want [github google]", got)
+	}
+}
+
+func TestOAuthClientSecretUsesCurrentManagedValue(t *testing.T) {
+	srv := newTestServer()
+	provider := testManagedGoogleProvider()
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+	oldSecretCT, oldSecretNonce, err := crypto.Encrypt([]byte("old-managed-secret"), srv.encKey)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	config := &store.CredentialOAuth{
+		AuthorizationURL:  provider.AuthorizationURL,
+		TokenURL:          provider.TokenURL,
+		ClientID:          provider.ClientID,
+		ClientSecretCT:    oldSecretCT,
+		ClientSecretNonce: oldSecretNonce,
+	}
+
+	got, err := srv.oauthClientSecret(config)
+	if err != nil {
+		t.Fatalf("oauthClientSecret: %v", err)
+	}
+	if got != provider.ClientSecret {
+		t.Fatalf("oauthClientSecret = %q, want current managed secret", got)
+	}
+}
+
+func TestOAuthClientSecretFallsBackToStoredValue(t *testing.T) {
+	srv := newTestServer()
+	secretCT, secretNonce, err := crypto.Encrypt([]byte("stored-secret"), srv.encKey)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	config := &store.CredentialOAuth{
+		AuthorizationURL:  "https://custom.example.com/authorize",
+		TokenURL:          "https://custom.example.com/token",
+		ClientID:          "custom-client-id",
+		ClientSecretCT:    secretCT,
+		ClientSecretNonce: secretNonce,
+	}
+
+	got, err := srv.oauthClientSecret(config)
+	if err != nil {
+		t.Fatalf("oauthClientSecret: %v", err)
+	}
+	if got != "stored-secret" {
+		t.Fatalf("oauthClientSecret = %q, want stored secret", got)
 	}
 }
