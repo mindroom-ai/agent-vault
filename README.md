@@ -104,6 +104,17 @@ docker run -it -p 14321:14321 -p 14322:14322 \
   -v agent-vault-data:/data infisical/agent-vault
 ```
 
+### Managed OAuth applications
+
+Instance operators can configure one Google OAuth Web application for every vault:
+
+```bash
+export AGENT_VAULT_OAUTH_GOOGLE_CLIENT_ID=your-client-id
+export AGENT_VAULT_OAUTH_GOOGLE_CLIENT_SECRET=your-client-secret
+```
+
+Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` as an authorized redirect URI. Vault users can then choose **Google (managed)** and authorize separate Google accounts without creating or entering OAuth client credentials. Access and refresh tokens stay isolated per vault, while the shared client secret remains operator-managed and is resolved at runtime so secret rotation does not require reconnecting every vault.
+
 The server starts the HTTP API on port `14321` and a transparent HTTP/HTTPS proxy on port `14322`; the same listener handles `CONNECT` for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams.
 
 The web UI becomes available at `http://<host>:14321` and you'll be prompted to create the first user known as the instance **owner**.

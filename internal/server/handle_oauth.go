@@ -26,6 +26,7 @@ const oauthSecretSentinel = "••••••••"
 type oauthConnectRequest struct {
 	Vault            string `json:"vault"`
 	Key              string `json:"key"`
+	Provider         string `json:"provider,omitempty"`
 	AuthorizationURL string `json:"authorization_url"`
 	TokenURL         string `json:"token_url"`
 	ClientID         string `json:"client_id"`
@@ -40,6 +41,10 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 	var req oauthConnectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := s.applyManagedOAuthProvider(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Vault == "" {
@@ -118,17 +123,17 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.store.SetCredentialOAuth(ctx, &store.CredentialOAuth{
-		VaultID:          ns.ID,
-		CredentialKey:    req.Key,
-		AuthorizationURL: req.AuthorizationURL,
-		TokenURL:         req.TokenURL,
-		ClientID:         req.ClientID,
-		ClientSecretCT:   clientSecretCT,
+		VaultID:           ns.ID,
+		CredentialKey:     req.Key,
+		AuthorizationURL:  req.AuthorizationURL,
+		TokenURL:          req.TokenURL,
+		ClientID:          req.ClientID,
+		ClientSecretCT:    clientSecretCT,
 		ClientSecretNonce: clientSecretNonce,
-		Scopes:           req.Scopes,
-		ScopeSeparator:   scopeSep,
-		DisablePKCE:      req.DisablePKCE,
-		TokenAuthMethod:  tokenAuthMethod,
+		Scopes:            req.Scopes,
+		ScopeSeparator:    scopeSep,
+		DisablePKCE:       req.DisablePKCE,
+		TokenAuthMethod:   tokenAuthMethod,
 	}); err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to save OAuth configuration")
 		return
@@ -209,14 +214,10 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var clientSecret string
-	if len(oauthCfg.ClientSecretCT) > 0 {
-		cs, err := crypto.Decrypt(oauthCfg.ClientSecretCT, oauthCfg.ClientSecretNonce, s.encKey)
-		if err != nil {
-			s.redirectOAuthComplete(w, r, "", "", "error", "Failed to decrypt client secret")
-			return
-		}
-		clientSecret = string(cs)
+	clientSecret, err := s.oauthClientSecret(oauthCfg)
+	if err != nil {
+		s.redirectOAuthComplete(w, r, "", "", "error", "Failed to decrypt client secret")
+		return
 	}
 
 	redirectURI := s.baseURL + "/v1/oauth/callback"
@@ -380,10 +381,10 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		// If the caller sends a different token_url, don't send stored secrets
 		// to the new endpoint (prevents client secret exfiltration).
 		providerUnchanged := tokenURL == existing.TokenURL
-		if clientSecret == "" && len(existing.ClientSecretCT) > 0 && providerUnchanged {
-			cs, err := crypto.Decrypt(existing.ClientSecretCT, existing.ClientSecretNonce, s.encKey)
-			if err == nil {
-				clientSecret = string(cs)
+		if clientSecret == "" && providerUnchanged {
+			resolvedSecret, resolveErr := s.oauthClientSecret(existing)
+			if resolveErr == nil {
+				clientSecret = resolvedSecret
 			}
 		}
 		if tokenAuthMethod == "" {
@@ -429,7 +430,8 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		}
 
 		var clientSecretCT, clientSecretNonce []byte
-		if clientSecret != "" {
+		_, managedProvider := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(existing)
+		if clientSecret != "" && !managedProvider {
 			clientSecretCT, clientSecretNonce, err = crypto.Encrypt([]byte(clientSecret), s.encKey)
 			if err != nil {
 				jsonError(w, http.StatusInternalServerError, "Encryption failed")
@@ -552,7 +554,6 @@ func (s *Server) redirectOAuthComplete(w http.ResponseWriter, r *http.Request, v
 	}
 	http.Redirect(w, r, u, http.StatusFound)
 }
-
 
 func isValidHTTPURL(raw string) bool {
 	u, err := url.Parse(raw)

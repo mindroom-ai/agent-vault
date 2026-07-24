@@ -81,6 +81,12 @@ type OAuthStore interface {
 	UpdateCredentialOAuthError(ctx context.Context, vaultID, key string, errMsg string) error
 }
 
+// OAuthClientSecretResolver returns an operator-managed client secret for an
+// OAuth configuration. ok=false means the credential uses its stored secret.
+type OAuthClientSecretResolver interface {
+	ResolveOAuthClientSecret(config *store.CredentialOAuth) (secret string, ok bool)
+}
+
 // DynamicCredentialResolver resolves credential keys that are not stored
 // statically — e.g. Infisical dynamic-secret leases minted on demand. ok=false
 // means "not a dynamic credential" (the caller keeps its not-found error); a
@@ -93,11 +99,12 @@ type DynamicCredentialResolver interface {
 // StoreCredentialProvider injects credentials using a CredentialStore and a
 // 32-byte AES-256-GCM key held in memory for the lifetime of the process.
 type StoreCredentialProvider struct {
-	Store      CredentialStore
-	OAuthStore OAuthStore // nil = no OAuth refresh
-	EncKey     []byte
-	Refresher  *oauth.Refresher          // nil = no OAuth refresh
-	Dynamic    DynamicCredentialResolver // nil = no dynamic-secret resolution
+	Store        CredentialStore
+	OAuthStore   OAuthStore // nil = no OAuth refresh
+	EncKey       []byte
+	Refresher    *oauth.Refresher          // nil = no OAuth refresh
+	OAuthSecrets OAuthClientSecretResolver // nil = use stored client secrets
+	Dynamic      DynamicCredentialResolver // nil = no dynamic-secret resolution
 }
 
 // NewStoreCredentialProvider constructs a provider. encKey must be 32 bytes.
@@ -278,13 +285,9 @@ func (p *StoreCredentialProvider) maybeRefreshOAuth(ctx context.Context, vaultID
 			return oauth.RefreshResult{Err: fmt.Errorf("%w: decrypt refresh token: %v", ErrOAuthRefreshFailed, err)}
 		}
 
-		var clientSecret string
-		if len(oauthCfg.ClientSecretCT) > 0 {
-			cs, err := crypto.Decrypt(oauthCfg.ClientSecretCT, oauthCfg.ClientSecretNonce, p.EncKey)
-			if err != nil {
-				return oauth.RefreshResult{Err: fmt.Errorf("%w: decrypt client secret: %v", ErrOAuthRefreshFailed, err)}
-			}
-			clientSecret = string(cs)
+		clientSecret, err := p.resolveOAuthClientSecret(oauthCfg)
+		if err != nil {
+			return oauth.RefreshResult{Err: fmt.Errorf("%w: decrypt client secret: %v", ErrOAuthRefreshFailed, err)}
 		}
 
 		tok, err := oauth.Refresh(ctx, oauth.RefreshConfig{
@@ -333,4 +336,20 @@ func (p *StoreCredentialProvider) maybeRefreshOAuth(ctx context.Context, vaultID
 		return result.AccessToken, nil
 	}
 	return currentToken, nil
+}
+
+func (p *StoreCredentialProvider) resolveOAuthClientSecret(config *store.CredentialOAuth) (string, error) {
+	if p.OAuthSecrets != nil {
+		if secret, ok := p.OAuthSecrets.ResolveOAuthClientSecret(config); ok {
+			return secret, nil
+		}
+	}
+	if len(config.ClientSecretCT) == 0 {
+		return "", nil
+	}
+	secret, err := crypto.Decrypt(config.ClientSecretCT, config.ClientSecretNonce, p.EncKey)
+	if err != nil {
+		return "", err
+	}
+	return string(secret), nil
 }
