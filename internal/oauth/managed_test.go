@@ -41,6 +41,9 @@ func TestLoadManagedProvidersFromEnvGoogle(t *testing.T) {
 	if got.ClientSecret != "google-client-secret" {
 		t.Errorf("ClientSecret = %q, want configured secret", got.ClientSecret)
 	}
+	if !got.RequireScopes {
+		t.Error("RequireScopes = false, want true for Google")
+	}
 	if !strings.Contains(got.AuthorizationURL, "access_type=offline") || !strings.Contains(got.AuthorizationURL, "prompt=consent") {
 		t.Errorf("AuthorizationURL = %q, want offline consent parameters", got.AuthorizationURL)
 	}

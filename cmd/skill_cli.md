@@ -103,7 +103,7 @@ There are two ways to set up an OAuth credential:
 
 ### Connect flow (human completes OAuth consent in the browser)
 
-Use when you know the provider's OAuth URLs. The human enters their client ID/secret and clicks "Connect" during approval.
+Use when you know the provider's OAuth URLs. During approval, the human chooses an instance-managed provider when one is available; otherwise they enter their own client ID/secret. They then click "Connect" to complete consent.
 
 ```bash
 agent-vault vault proposal create -f - --json <<'EOF'
@@ -119,7 +119,7 @@ agent-vault vault proposal create -f - --json <<'EOF'
       "token_url": "https://oauth2.googleapis.com/token",
       "scopes": "https://www.googleapis.com/auth/calendar.readonly"
     },
-    "obtain_instructions": "Register an OAuth app at console.cloud.google.com, then enter your client ID and secret when approving"
+    "obtain_instructions": "Approve the proposal, choose Google (managed) when available, and connect your Google account. If Google (managed) is unavailable, register an OAuth app at console.cloud.google.com and enter its client ID and secret."
   }],
   "message": "Need Google Calendar access"
 }
@@ -129,7 +129,7 @@ EOF
 OAuth config fields:
 - `authorization_url` (required for connect flow): the provider's consent page URL
 - `token_url` (required): where to exchange the code for tokens
-- `scopes` (optional): space-separated permissions to request; omit for provider defaults
+- `scopes`: space-separated permissions to request; at least one scope is required for instance-managed providers such as Google, but self-configured providers may omit it to use provider defaults
 - `client_id`, `client_secret`: provided by the human during approval, not in the proposal
 
 ### Token upload (human pastes tokens they already have)

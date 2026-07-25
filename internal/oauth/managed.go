@@ -23,6 +23,7 @@ type ManagedProvider struct {
 	ClientID         string
 	ClientSecret     string
 	TokenAuthMethod  string
+	RequireScopes    bool
 }
 
 // LoadManagedProvidersFromEnv loads operator-managed OAuth applications.
@@ -50,5 +51,6 @@ func LoadManagedProvidersFromEnv() ([]ManagedProvider, error) {
 		ClientID:         googleClientID,
 		ClientSecret:     googleClientSecret,
 		TokenAuthMethod:  "client_secret_post",
+		RequireScopes:    true,
 	}}, nil
 }
