@@ -552,7 +552,7 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
   const isManagedProvider = !!oauthProviderId && managedOAuthProviders.includes(oauthProviderId);
   const scopeOptions = (currentProvider?.scopes ?? []).map((s) => ({ value: s.value, description: s.description }));
   const canSubmitStatic = entries.every((e) => e.key.trim() && e.value.trim());
-  const canSubmitOAuthConnect = !!(oauthKey.trim() && oauthTokenUrl.trim() && (isManagedProvider || oauthClientId.trim()) && oauthAuthUrl.trim());
+  const canSubmitOAuthConnect = !!(oauthKey.trim() && oauthTokenUrl.trim() && (isManagedProvider || oauthClientId.trim()) && oauthAuthUrl.trim() && (!isManagedProvider || oauthScopes.length > 0));
   const canSubmitOAuthTokens = !!(oauthKey.trim() && (oauthAccessToken.trim() || oauthRefreshToken.trim()));
   const canSubmit = credType === "static" ? canSubmitStatic : isTokenUpload ? canSubmitOAuthTokens : oauthConnected;
 
@@ -603,6 +603,10 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
   }
 
   async function handleOAuthConnect() {
+    if (isManagedProvider && oauthScopes.length === 0) {
+      setError("Choose at least one OAuth scope before connecting.");
+      return;
+    }
     setOauthConnecting(true); setError("");
     try {
       const resp = await apiFetch("/v1/credentials/oauth/connect", {
@@ -738,7 +742,7 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
                   </FormField></div>
                 </div>
               )}
-              <FormField label="Scopes">
+              <FormField label="Scopes" helperText={isManagedProvider ? "Required. Choose at least one scope before connecting." : undefined}>
                 <CreatableSelect
                   values={oauthScopes}
                   onChange={setOauthScopes}

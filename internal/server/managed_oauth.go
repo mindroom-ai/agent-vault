@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/oauth"
@@ -38,6 +39,9 @@ func (s *Server) applyManagedOAuthProvider(req *oauthConnectRequest) error {
 	provider, ok := s.managedOAuthProviders[req.Provider]
 	if !ok {
 		return fmt.Errorf("managed OAuth provider %q is not configured", req.Provider)
+	}
+	if provider.RequireScopes && strings.TrimSpace(req.Scopes) == "" {
+		return fmt.Errorf("managed OAuth provider %q requires at least one scope", req.Provider)
 	}
 
 	req.AuthorizationURL = provider.AuthorizationURL

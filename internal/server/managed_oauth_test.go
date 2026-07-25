@@ -16,6 +16,7 @@ func testManagedGoogleProvider() oauth.ManagedProvider {
 		ClientID:         "managed-client-id",
 		ClientSecret:     "managed-client-secret",
 		TokenAuthMethod:  "client_secret_post",
+		RequireScopes:    true,
 	}
 }
 
@@ -30,6 +31,7 @@ func TestApplyManagedOAuthProvider(t *testing.T) {
 		ClientID:         "attacker-client-id",
 		ClientSecret:     "attacker-client-secret",
 		TokenAuthMethod:  "client_secret_basic",
+		Scopes:           "openid email",
 	}
 	if err := srv.applyManagedOAuthProvider(&req); err != nil {
 		t.Fatalf("applyManagedOAuthProvider: %v", err)
@@ -50,6 +52,22 @@ func TestApplyManagedOAuthProvider(t *testing.T) {
 	}
 	if req.TokenAuthMethod != provider.TokenAuthMethod {
 		t.Errorf("TokenAuthMethod = %q, want %q", req.TokenAuthMethod, provider.TokenAuthMethod)
+	}
+}
+
+func TestApplyManagedOAuthProviderRejectsMissingRequiredScopes(t *testing.T) {
+	srv := newTestServer()
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{testManagedGoogleProvider()})
+
+	for _, scopes := range []string{"", " \t\n"} {
+		req := oauthConnectRequest{Provider: "google", Scopes: scopes}
+		err := srv.applyManagedOAuthProvider(&req)
+		if err == nil {
+			t.Fatalf("applyManagedOAuthProvider succeeded with scopes %q", scopes)
+		}
+		if got, want := err.Error(), `managed OAuth provider "google" requires at least one scope`; got != want {
+			t.Fatalf("applyManagedOAuthProvider error = %q, want %q", got, want)
+		}
 	}
 }
 
