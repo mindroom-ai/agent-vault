@@ -37,7 +37,7 @@ jobs:
 
       - name: Build and publish image
         env:
-          IMAGE: ghcr.io/mindroom-ai/agent-vault
+          IMAGE: ghcr.io/mindroom-ai/mindroom-agent-vault
         run: |
           created="$(git show -s --format=%cI HEAD)"
           docker buildx build \
@@ -55,4 +55,4 @@ jobs:
             .
 
       - name: Inspect published image
-        run: docker buildx imagetools inspect "ghcr.io/mindroom-ai/agent-vault:sha-${GITHUB_SHA}"
+        run: docker buildx imagetools inspect "ghcr.io/mindroom-ai/mindroom-agent-vault:sha-${GITHUB_SHA}"
