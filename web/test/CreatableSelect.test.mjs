@@ -113,6 +113,10 @@ async function clickElement(element) {
   });
 }
 
+async function mouseEnter(element) {
+  await act(async () => element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+}
+
 async function setQuery(input, value) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value").set.call(input, value);
@@ -257,6 +261,35 @@ test("keyboard navigation keeps the active option visible in an overflowing list
   await keyDown(input, "ArrowUp");
   assert.equal(input.getAttribute("aria-activedescendant"), optionElements[19].id);
   assert.equal(listbox.scrollTop, 680);
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("mouse selection keeps an overflowing list at its current scroll position", async () => {
+  const overflowOptions = Array.from({ length: 20 }, (_, index) => ({ value: `scope-${index}` }));
+  const root = await mountPicker([], [], overflowOptions);
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  const listbox = document.querySelector('[role="listbox"]');
+  const optionElements = [...listbox.querySelectorAll('[role="option"]')];
+  Object.defineProperty(listbox, "clientHeight", { configurable: true, value: 120 });
+  optionElements.forEach((option, index) => {
+    Object.defineProperty(option, "offsetTop", { configurable: true, value: index * 40 });
+    Object.defineProperty(option, "offsetHeight", { configurable: true, value: 40 });
+  });
+  listbox.scrollTop = 520;
+
+  const visibleOption = optionElements[15];
+  await mouseEnter(visibleOption);
+  assert.equal(input.getAttribute("aria-activedescendant"), visibleOption.id);
+  assert.equal(listbox.scrollTop, 520);
+
+  await clickElement(visibleOption);
+  assert.deepEqual(selectedValues(), ["scope-15"]);
+  assert.equal(document.querySelector('[role="listbox"]') !== null, true);
+  assert.equal(listbox.scrollTop, 520);
 
   await act(async () => root.unmount());
   mountedRoot = undefined;

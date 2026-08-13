@@ -38,6 +38,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   const selectedValuesRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const positionFrameRef = useRef<number | null>(null);
+  const keyboardNavigationRef = useRef(false);
   const listboxId = useId();
   const [pos, setPos] = useState({ top: 0, left: 0, width: 0, maxHeight: 256 });
 
@@ -131,6 +132,8 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   }, [open, values, query]);
 
   useLayoutEffect(() => {
+    if (!keyboardNavigationRef.current) return;
+    keyboardNavigationRef.current = false;
     const list = listRef.current;
     if (!menuOpen || !activeOptionId || !list || list.clientHeight <= 0) return;
     const activeOption = document.getElementById(activeOptionId);
@@ -148,6 +151,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   }, [activeOptionId, items.length, menuOpen, query]);
 
   function show() {
+    keyboardNavigationRef.current = false;
     updatePosition();
     setHighlighted(0);
     setOpen(true);
@@ -155,6 +159,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
 
   function addValue(v: string) {
     if (!v || values.includes(v)) return;
+    keyboardNavigationRef.current = false;
     onChange([...values, v]);
     setQuery("");
     setHighlighted(0);
@@ -173,6 +178,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   }
 
   function toggleBulkOption(option: CreatableSelectBulkOption) {
+    keyboardNavigationRef.current = false;
     const allSelected = option.values.length > 0 && option.values.every((value) => values.includes(value));
     if (allSelected) {
       const bundleValues = new Set(option.values);
@@ -192,9 +198,11 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
     if (!open || items.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
+      keyboardNavigationRef.current = true;
       setHighlighted((h) => (h + 1) % items.length);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
+      keyboardNavigationRef.current = true;
       setHighlighted((h) => (h - 1 + items.length) % items.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -307,7 +315,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                     aria-selected={selected}
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                     onClick={() => toggleBulkOption(bulkOption)}
-                    onMouseEnter={() => setHighlighted(i)}
+                    onMouseEnter={() => { keyboardNavigationRef.current = false; setHighlighted(i); }}
                     className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between border-b border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
                     <div className="min-w-0 flex-1">
@@ -331,7 +339,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                     aria-selected="false"
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                     onClick={() => addValue(item.createValue!)}
-                    onMouseEnter={() => setHighlighted(i)}
+                    onMouseEnter={() => { keyboardNavigationRef.current = false; setHighlighted(i); }}
                     className={`w-full text-left px-4 py-2.5 transition-colors border-t border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
                     <span className="text-sm text-primary">Add "{item.createValue}"</span>
@@ -350,7 +358,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                   aria-selected={selected}
                   onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                   onClick={() => toggleOption(opt.value)}
-                  onMouseEnter={() => setHighlighted(i)}
+                  onMouseEnter={() => { keyboardNavigationRef.current = false; setHighlighted(i); }}
                   className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between ${i === highlighted ? "bg-bg" : ""}`}
                 >
                   <div className="min-w-0 flex-1">
