@@ -266,7 +266,7 @@ test("keyboard navigation keeps the active option visible in an overflowing list
   mountedRoot = undefined;
 });
 
-test("mouse selection keeps an overflowing list at its current scroll position", async () => {
+test("mouse interaction does not auto-scroll a partially clipped option", async () => {
   const overflowOptions = Array.from({ length: 20 }, (_, index) => ({ value: `scope-${index}` }));
   const root = await mountPicker([], [], overflowOptions);
   const input = document.querySelector("input");
@@ -279,17 +279,17 @@ test("mouse selection keeps an overflowing list at its current scroll position",
     Object.defineProperty(option, "offsetTop", { configurable: true, value: index * 40 });
     Object.defineProperty(option, "offsetHeight", { configurable: true, value: 40 });
   });
-  listbox.scrollTop = 520;
+  listbox.scrollTop = 100;
 
-  const visibleOption = optionElements[15];
-  await mouseEnter(visibleOption);
-  assert.equal(input.getAttribute("aria-activedescendant"), visibleOption.id);
-  assert.equal(listbox.scrollTop, 520);
+  const clippedOption = optionElements[2];
+  await mouseEnter(clippedOption);
+  assert.equal(input.getAttribute("aria-activedescendant"), clippedOption.id);
+  assert.equal(listbox.scrollTop, 100);
 
-  await clickElement(visibleOption);
-  assert.deepEqual(selectedValues(), ["scope-15"]);
+  await clickElement(clippedOption);
+  assert.deepEqual(selectedValues(), ["scope-2"]);
   assert.equal(document.querySelector('[role="listbox"]') !== null, true);
-  assert.equal(listbox.scrollTop, 520);
+  assert.equal(listbox.scrollTop, 100);
 
   await act(async () => root.unmount());
   mountedRoot = undefined;
