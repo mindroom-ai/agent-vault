@@ -23,7 +23,15 @@ const { createRoot } = await import("react-dom/client");
 
 let wrapperTop = 100;
 let viewportHeight = 768;
+let nextAnimationFrameId = 1;
+const pendingAnimationFrames = new Map();
 Object.defineProperty(browser, "innerHeight", { configurable: true, get: () => viewportHeight });
+browser.requestAnimationFrame = (callback) => {
+  const id = nextAnimationFrameId++;
+  pendingAnimationFrames.set(id, callback);
+  return id;
+};
+browser.cancelAnimationFrame = (id) => pendingAnimationFrames.delete(id);
 Object.defineProperty(browser.HTMLElement.prototype, "scrollHeight", {
   configurable: true,
   get() {
@@ -60,6 +68,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
   wrapperTop = 100;
   viewportHeight = 768;
+  pendingAnimationFrames.clear();
 });
 
 const scopes = [
@@ -113,6 +122,12 @@ async function setQuery(input, value) {
 
 async function keyDown(element, key) {
   await act(async () => element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
+}
+
+async function flushAnimationFrames() {
+  const callbacks = [...pendingAnimationFrames.values()];
+  pendingAnimationFrames.clear();
+  await act(async () => callbacks.forEach((callback) => callback(0)));
 }
 
 function selectedValues() {
@@ -251,12 +266,33 @@ test("menu remeasures after filtering and reanchors on scroll and resize", async
 
   wrapperTop = 300;
   await act(async () => document.getElementById("root").dispatchEvent(new Event("scroll", { bubbles: false })));
+  await act(async () => document.getElementById("root").dispatchEvent(new Event("scroll", { bubbles: false })));
+  assert.equal(pendingAnimationFrames.size, 1);
+  assert.equal(document.querySelector('[role="listbox"]').style.top, "670px");
+  await flushAnimationFrames();
   assert.equal(document.querySelector('[role="listbox"]').style.top, "350px");
 
   await setQuery(input, "");
   viewportHeight = 400;
   await act(async () => window.dispatchEvent(new Event("resize")));
+  assert.equal(pendingAnimationFrames.size, 1);
+  await flushAnimationFrames();
   assert.equal(document.querySelector('[role="listbox"]').style.top, "176px");
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("menu height never exceeds the available viewport space", async () => {
+  wrapperTop = 30;
+  viewportHeight = 100;
+  const root = await mountPicker();
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  const listbox = document.querySelector('[role="listbox"]');
+  assert.equal(listbox.style.top, "4px");
+  assert.equal(listbox.style.maxHeight, "26px");
 
   await act(async () => root.unmount());
   mountedRoot = undefined;

@@ -37,6 +37,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectedValuesRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const positionFrameRef = useRef<number | null>(null);
   const listboxId = useId();
   const [pos, setPos] = useState({ top: 0, left: 0, width: 0, maxHeight: 256 });
 
@@ -74,15 +75,27 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
       }
     }
     document.addEventListener("mousedown", handleClick);
-    const handleViewportChange = () => updatePosition();
+    const handleViewportChange = () => schedulePositionUpdate();
     window.addEventListener("resize", handleViewportChange);
-    window.addEventListener("scroll", handleViewportChange, true);
+    window.addEventListener("scroll", handleViewportChange, { capture: true, passive: true });
     return () => {
       document.removeEventListener("mousedown", handleClick);
       window.removeEventListener("resize", handleViewportChange);
       window.removeEventListener("scroll", handleViewportChange, true);
+      if (positionFrameRef.current !== null) {
+        window.cancelAnimationFrame(positionFrameRef.current);
+        positionFrameRef.current = null;
+      }
     };
   }, [open]);
+
+  function schedulePositionUpdate() {
+    if (positionFrameRef.current !== null) return;
+    positionFrameRef.current = window.requestAnimationFrame(() => {
+      positionFrameRef.current = null;
+      updatePosition();
+    });
+  }
 
   function updatePosition() {
     if (wrapperRef.current) {
@@ -93,14 +106,22 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
       const spaceBelow = window.innerHeight - rect.bottom - gap;
       const spaceAbove = rect.top - gap;
       const openAbove = spaceBelow < menuHeight && spaceAbove > spaceBelow;
-      const availableHeight = Math.max(80, Math.min(maxMenuHeight, openAbove ? spaceAbove : spaceBelow));
+      const availableHeight = Math.max(0, Math.min(maxMenuHeight, openAbove ? spaceAbove : spaceBelow));
       const visibleMenuHeight = Math.min(menuHeight, availableHeight);
-      setPos({
+      const nextPos = {
         top: openAbove ? Math.max(gap, rect.top - visibleMenuHeight - gap) : rect.bottom + gap,
         left: rect.left,
         width: rect.width,
         maxHeight: availableHeight,
-      });
+      };
+      setPos((current) => (
+        current.top === nextPos.top
+        && current.left === nextPos.left
+        && current.width === nextPos.width
+        && current.maxHeight === nextPos.maxHeight
+          ? current
+          : nextPos
+      ));
     }
   }
 
