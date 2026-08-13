@@ -250,7 +250,7 @@ test("menu remeasures after filtering and reanchors on scroll and resize", async
   assert.equal(document.querySelector('[role="listbox"]').style.top, "670px");
 
   wrapperTop = 300;
-  await act(async () => window.dispatchEvent(new Event("scroll")));
+  await act(async () => document.getElementById("root").dispatchEvent(new Event("scroll", { bubbles: false })));
   assert.equal(document.querySelector('[role="listbox"]').style.top, "350px");
 
   await setQuery(input, "");
