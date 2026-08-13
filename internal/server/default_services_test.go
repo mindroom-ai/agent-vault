@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,6 +90,31 @@ func TestDefaultServiceSeedPreservesExistingNamedServices(t *testing.T) {
 	}
 }
 
+func TestDefaultServiceSeedPersistsBackfilledNamesWithoutAddingService(t *testing.T) {
+	t.Setenv(
+		"AGENT_VAULT_DEFAULT_SERVICES_JSON",
+		`[{"name":"api-github-com","host":"api.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}}]`,
+	)
+	ms := newMockStore()
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		VaultID:      "root-ns-id",
+		ServicesJSON: `[{"host":"api.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	if err := srv.seedDefaultServices(context.Background(), ms.vaults["default"]); err != nil {
+		t.Fatalf("seed defaults: %v", err)
+	}
+
+	var services []broker.Service
+	if err := json.Unmarshal([]byte(ms.brokerConfigs["root-ns-id"].ServicesJSON), &services); err != nil {
+		t.Fatalf("decode services: %v", err)
+	}
+	if len(services) != 1 || services[0].Name != "api-github-com" {
+		t.Fatalf("expected backfilled name to be persisted, got %s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
+	}
+}
+
 func TestConfiguredDefaultServicesBackfillExistingVaults(t *testing.T) {
 	t.Setenv("AGENT_VAULT_DEFAULT_SERVICES_JSON", defaultServicesFixture)
 	ms := newMockStore()
@@ -121,6 +147,52 @@ func TestConfiguredDefaultServicesBackfillExistingVaults(t *testing.T) {
 			t.Fatalf("vault %s: expected 4 services, got %d", vaultID, len(services))
 		}
 	}
+}
+
+func TestStartFailsToBindBeforeDefaultServiceReconciliation(t *testing.T) {
+	t.Setenv("AGENT_VAULT_DEFAULT_SERVICES_JSON", defaultServicesFixture)
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port: %v", err)
+	}
+	defer occupied.Close()
+
+	ms := newMockStore()
+	srv := newTestServer(withStore(ms))
+	srv.httpServer.Addr = occupied.Addr().String()
+
+	err = srv.Start()
+	if err == nil || !strings.Contains(err.Error(), "listen") {
+		t.Fatalf("expected listen error, got %v", err)
+	}
+	if config := ms.brokerConfigs["root-ns-id"]; config != nil {
+		t.Fatalf("failed startup mutated vault services: %s", config.ServicesJSON)
+	}
+}
+
+func TestStartClosesListenerWhenDefaultServiceReconciliationFails(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate address: %v", err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatalf("release address: %v", err)
+	}
+
+	t.Setenv("AGENT_VAULT_DEFAULT_SERVICES_JSON", "not-json")
+	srv := newTestServer()
+	srv.httpServer.Addr = addr
+
+	err = srv.Start()
+	if err == nil || !strings.Contains(err.Error(), "reconcile default services") {
+		t.Fatalf("expected reconciliation error, got %v", err)
+	}
+	rebound, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listener leaked after reconciliation failure: %v", err)
+	}
+	defer rebound.Close()
 }
 
 func TestConfiguredDefaultServicesRejectInvalidServiceBeforeBackfill(t *testing.T) {

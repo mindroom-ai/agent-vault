@@ -67,7 +67,7 @@ func (s *Server) seedDefaultServices(ctx context.Context, vault *store.Vault) er
 	}
 	defer unlock()
 
-	existing, err := s.loadServices(ctx, vault.ID)
+	existing, namesBackfilled, err := s.loadServicesWithBackfill(ctx, vault.ID)
 	if err != nil {
 		return fmt.Errorf("load vault services: %w", err)
 	}
@@ -75,7 +75,7 @@ func (s *Server) seedDefaultServices(ctx context.Context, vault *store.Vault) er
 	for _, service := range existing {
 		byName[service.Name] = true
 	}
-	changed := false
+	changed := namesBackfilled
 	for _, service := range s.defaultServices {
 		if !byName[service.Name] {
 			existing = append(existing, service)

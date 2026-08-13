@@ -1005,16 +1005,18 @@ func (s *Server) Start() error {
 			s.logger.Warn("ratelimit setting load failed", "err", err.Error())
 		}
 	}
-	if err := s.reconcileDefaultServices(context.Background()); err != nil {
-		return fmt.Errorf("reconcile default services: %w", err)
-	}
 
 	// Bind synchronously so EADDRINUSE returns from Start() before any pidfile
-	// work happens. Keeps a foreground invocation against an already-running
-	// daemon from clobbering the daemon's PID file.
+	// or default-service reconciliation work happens. Keeps a foreground
+	// invocation against an already-running daemon from mutating persistent
+	// state or clobbering the daemon's PID file.
 	httpLn, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.httpServer.Addr, err)
+	}
+	if err := s.reconcileDefaultServices(context.Background()); err != nil {
+		_ = httpLn.Close()
+		return fmt.Errorf("reconcile default services: %w", err)
 	}
 
 	stop := make(chan os.Signal, 1)
