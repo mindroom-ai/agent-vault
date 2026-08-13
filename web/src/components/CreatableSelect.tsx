@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export interface CreatableSelectOption {
@@ -35,8 +35,10 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   const [highlighted, setHighlighted] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const selectedValuesRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 });
+  const listboxId = useId();
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0, maxHeight: 256 });
 
   const q = query.trim().toLowerCase();
   const filteredBulkOptions = q
@@ -58,6 +60,8 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
     ...filtered.map((o) => ({ type: "option" as const, option: o })),
     ...(showCreate ? [{ type: "create" as const, createValue: query.trim() }] : []),
   ];
+  const menuOpen = open && items.length > 0;
+  const activeOptionId = menuOpen ? `${listboxId}-option-${Math.min(highlighted, items.length - 1)}` : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -70,17 +74,38 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
       }
     }
     document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    const handleViewportChange = () => updatePosition();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
   }, [open]);
 
   function updatePosition() {
     if (wrapperRef.current) {
       const rect = wrapperRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+      const gap = 4;
+      const maxMenuHeight = 256;
+      const menuHeight = Math.min(listRef.current?.scrollHeight ?? maxMenuHeight, maxMenuHeight);
+      const spaceBelow = window.innerHeight - rect.bottom - gap;
+      const spaceAbove = rect.top - gap;
+      const openAbove = spaceBelow < menuHeight && spaceAbove > spaceBelow;
+      const availableHeight = Math.max(80, Math.min(maxMenuHeight, openAbove ? spaceAbove : spaceBelow));
+      const visibleMenuHeight = Math.min(menuHeight, availableHeight);
+      setPos({
+        top: openAbove ? Math.max(gap, rect.top - visibleMenuHeight - gap) : rect.bottom + gap,
+        left: rect.left,
+        width: rect.width,
+        maxHeight: availableHeight,
+      });
     }
   }
 
   useLayoutEffect(() => {
+    if (selectedValuesRef.current) selectedValuesRef.current.scrollTop = selectedValuesRef.current.scrollHeight;
     if (open) updatePosition();
   }, [open, values]);
 
@@ -155,7 +180,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
         className={`flex items-center gap-1.5 w-full min-h-[46px] px-3 py-2 bg-surface-raised border rounded-lg text-sm transition-colors cursor-text ${open ? "border-border-focus shadow-[0_0_0_3px_var(--color-primary-ring)]" : "border-border"}`}
         onClick={() => { inputRef.current?.focus(); }}
       >
-        <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
+        <div ref={selectedValuesRef} data-selected-values className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0 max-h-40 overflow-y-auto">
           {values.map((v) => {
             const opt = options.find((o) => o.value === v);
             const label = opt?.label || v;
@@ -176,6 +201,13 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
           })}
           <input
             ref={inputRef}
+            role="combobox"
+            aria-label={placeholder || "Select options"}
+            aria-expanded={menuOpen}
+            aria-controls={listboxId}
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={activeOptionId}
             value={query}
             placeholder={values.length === 0 ? placeholder : undefined}
             onChange={(e) => { setQuery(e.target.value); setHighlighted(0); show(); }}
@@ -217,8 +249,11 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
         createPortal(
           <div
             ref={listRef}
-            className="fixed z-50 bg-surface border border-border rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] py-1 max-h-64 overflow-y-auto"
-            style={{ top: pos.top, left: pos.left, width: pos.width, scrollbarWidth: "thin", scrollbarColor: "var(--color-border) var(--color-surface)" }}
+            id={listboxId}
+            role="listbox"
+            aria-multiselectable="true"
+            className="fixed z-50 bg-surface border border-border rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] py-1 overflow-y-auto"
+            style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight, scrollbarWidth: "thin", scrollbarColor: "var(--color-border) var(--color-surface)" }}
           >
             {items.map((item, i) => {
               if (item.type === "bulk") {
@@ -227,8 +262,10 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                 return (
                   <button
                     key={`__bulk__${bulkOption.label}`}
+                    id={`${listboxId}-option-${i}`}
                     type="button"
-                    aria-pressed={selected}
+                    role="option"
+                    aria-selected={selected}
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleBulkOption(bulkOption); }}
                     onMouseEnter={() => setHighlighted(i)}
                     className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between border-b border-border ${i === highlighted ? "bg-bg" : ""}`}
@@ -247,7 +284,10 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                 return (
                   <button
                     key="__create__"
+                    id={`${listboxId}-option-${i}`}
                     type="button"
+                    role="option"
+                    aria-selected="false"
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); addValue(item.createValue!); }}
                     onMouseEnter={() => setHighlighted(i)}
                     className={`w-full text-left px-4 py-2.5 transition-colors border-t border-border ${i === highlighted ? "bg-bg" : ""}`}
@@ -261,8 +301,10 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
               return (
                 <button
                   key={opt.value}
+                  id={`${listboxId}-option-${i}`}
                   type="button"
-                  aria-pressed={selected}
+                  role="option"
+                  aria-selected={selected}
                   onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleOption(opt.value); }}
                   onMouseEnter={() => setHighlighted(i)}
                   className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between ${i === highlighted ? "bg-bg" : ""}`}

@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import { after, test } from "node:test";
+import { after, afterEach, test } from "node:test";
 
 import react from "@vitejs/plugin-react";
 import { Window } from "happy-dom";
-import React, { act, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { createServer } from "vite";
 
 const browser = new Window({ url: "http://localhost" });
@@ -15,13 +13,19 @@ Object.assign(globalThis, {
   HTMLElement: browser.HTMLElement,
   Event: browser.Event,
   FocusEvent: browser.FocusEvent,
+  InputEvent: browser.InputEvent,
+  KeyboardEvent: browser.KeyboardEvent,
   MouseEvent: browser.MouseEvent,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+const { default: React, act, useState } = await import("react");
+const { createRoot } = await import("react-dom/client");
 
 browser.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
   const selectedCount = this.querySelectorAll?.('button[aria-label^="Remove "]').length ?? 0;
-  const bottom = 146 + selectedCount * 50;
+  const selectedValues = this.querySelector?.("[data-selected-values]");
+  const visibleSelectedCount = selectedValues?.classList.contains("max-h-40") ? Math.min(selectedCount, 3) : selectedCount;
+  const bottom = 146 + visibleSelectedCount * 50;
   return { x: 20, y: 100, top: 100, right: 420, bottom, left: 20, width: 400, height: bottom - 100, toJSON: () => ({}) };
 };
 
@@ -37,6 +41,12 @@ const { default: CreatableSelect } = await vite.ssrLoadModule("/src/components/C
 const { OAUTH_PROVIDERS } = await vite.ssrLoadModule("/src/lib/oauthProviders.ts");
 
 after(() => vite.close());
+let mountedRoot;
+afterEach(async () => {
+  if (mountedRoot) await act(async () => mountedRoot.unmount());
+  mountedRoot = undefined;
+  document.body.innerHTML = "";
+});
 
 const scopes = [
   "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -60,6 +70,7 @@ async function mountPicker(initialValues = [], bulkOptions = []) {
   }
 
   await act(async () => root.render(React.createElement(Harness)));
+  mountedRoot = root;
   return root;
 }
 
@@ -69,6 +80,17 @@ function optionButton(scope) {
 
 async function mouseDown(element) {
   await act(async () => element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+}
+
+async function setQuery(input, value) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value").set.call(input, value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+  });
+}
+
+async function keyDown(element, key) {
+  await act(async () => element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
 }
 
 function selectedValues() {
@@ -82,15 +104,16 @@ test("dropdown stays open and repositions while selecting multiple scopes", asyn
 
   assert.equal(document.querySelector('div[style*="top: 150px"]') !== null, true);
   await mouseDown(optionButton(scopes[0]));
-  assert.equal(optionButton(scopes[0]).getAttribute("aria-pressed"), "true");
+  assert.equal(optionButton(scopes[0]).getAttribute("aria-selected"), "true");
   assert.equal(document.querySelector('div[style*="top: 200px"]') !== null, true);
 
   await mouseDown(optionButton(scopes[1]));
-  assert.equal(optionButton(scopes[0]).getAttribute("aria-pressed"), "true");
-  assert.equal(optionButton(scopes[1]).getAttribute("aria-pressed"), "true");
+  assert.equal(optionButton(scopes[0]).getAttribute("aria-selected"), "true");
+  assert.equal(optionButton(scopes[1]).getAttribute("aria-selected"), "true");
   assert.equal(document.querySelector('div[style*="top: 250px"]') !== null, true);
 
   await act(async () => root.unmount());
+  mountedRoot = undefined;
 });
 
 test("selected chips and suggestions expose full scope values without truncation", async () => {
@@ -108,6 +131,7 @@ test("selected chips and suggestions expose full scope values without truncation
   assert.equal(labels[0].parentElement.classList.contains("max-w-[200px]"), false);
 
   await act(async () => root.unmount());
+  mountedRoot = undefined;
 });
 
 test("Google exposes complete all-scope and read-only bundles", () => {
@@ -133,19 +157,70 @@ test("bulk options add missing scopes, preserve custom scopes, and keep the drop
   await mouseDown(optionButton("ALL READ SCOPES"));
   const readBundle = google.scopeBundles.find((bundle) => bundle.label === "ALL READ SCOPES");
   assert.deepEqual(selectedValues(), ["custom.scope", ...readBundle.values]);
-  assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-pressed"), "true");
-  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-pressed"), "false");
+  assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-selected"), "true");
+  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-selected"), "false");
+  const selectedValuesContainer = document.querySelector("[data-selected-values]");
+  assert.equal(selectedValuesContainer.classList.contains("max-h-40"), true);
+  assert.equal(selectedValuesContainer.classList.contains("overflow-y-auto"), true);
+  assert.equal(document.querySelector('div[style*="top: 300px"]') !== null, true);
 
   await mouseDown(optionButton("ALL SCOPES"));
   const allSelectedValues = selectedValues();
   assert.equal(allSelectedValues.length, google.scopes.length + 1);
   assert.deepEqual(new Set(allSelectedValues), new Set(["custom.scope", ...google.scopes.map((scope) => scope.value)]));
-  assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-pressed"), "true");
-  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-pressed"), "true");
+  assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-selected"), "true");
+  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-selected"), "true");
 
   await mouseDown(optionButton("ALL SCOPES"));
   assert.deepEqual(selectedValues(), ["custom.scope"]);
-  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-pressed"), "false");
+  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-selected"), "false");
 
   await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("multiselect exposes a named combobox, listbox, and active option", async () => {
+  const root = await mountPicker([scopes[0]]);
+  const input = document.querySelector("input");
+
+  assert.equal(input.getAttribute("aria-label"), "Add scopes");
+  assert.equal(input.getAttribute("role"), "combobox");
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  const listboxId = input.getAttribute("aria-controls");
+  const listbox = document.getElementById(listboxId);
+  assert.equal(input.getAttribute("aria-expanded"), "true");
+  assert.equal(listbox.getAttribute("role"), "listbox");
+  assert.equal(listbox.getAttribute("aria-multiselectable"), "true");
+  assert.equal(document.getElementById(input.getAttribute("aria-activedescendant")).getAttribute("role"), "option");
+
+  await keyDown(input, "ArrowDown");
+  assert.equal(document.getElementById(input.getAttribute("aria-activedescendant")).getAttribute("role"), "option");
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("keyboard bulk selection never stores its label and custom creation still works", async () => {
+  const google = OAUTH_PROVIDERS.find((provider) => provider.id === "google");
+  const root = await mountPicker([], google.scopeBundles);
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  await setQuery(input, "ALL SCOPES");
+  assert.equal(input.value, "ALL SCOPES");
+  assert.equal([...document.querySelectorAll("button")].some((button) => button.textContent.includes('Add "ALL SCOPES"')), false);
+  await keyDown(input, "Enter");
+  assert.equal(selectedValues().includes("ALL SCOPES"), false);
+  assert.deepEqual(new Set(selectedValues()), new Set(google.scopes.map((scope) => scope.value)));
+
+  await mouseDown(document.querySelector('button[aria-label="Clear all"]'));
+  await setQuery(input, "custom.scope.created");
+  assert.equal(input.value, "custom.scope.created");
+  await keyDown(input, "Enter");
+  assert.deepEqual(selectedValues(), ["custom.scope.created"]);
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
 });
