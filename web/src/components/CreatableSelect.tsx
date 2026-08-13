@@ -14,6 +14,14 @@ interface CreatableSelectProps {
   placeholder?: string;
 }
 
+export function getVisibleOptions(options: CreatableSelectOption[], values: string[], query: string) {
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter((o) => o.value.toLowerCase().includes(q) || o.label?.toLowerCase().includes(q) || o.description?.toLowerCase().includes(q))
+    : options;
+  return filtered.map((option) => ({ ...option, selected: values.includes(option.value) }));
+}
+
 export default function CreatableSelect({ values, onChange, options = [], placeholder }: CreatableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -24,14 +32,11 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
   const [pos, setPos] = useState({ top: 0, left: 0, width: 0 });
 
   const q = query.trim().toLowerCase();
-  const available = options.filter((o) => !values.includes(o.value));
-  const filtered = q
-    ? available.filter((o) => o.value.toLowerCase().includes(q) || o.label?.toLowerCase().includes(q) || o.description?.toLowerCase().includes(q))
-    : available;
+  const filtered = getVisibleOptions(options, values, query);
   const exactMatch = options.some((o) => o.value.toLowerCase() === q) || values.some((v) => v.toLowerCase() === q);
   const showCreate = q && !exactMatch;
 
-  const items: { type: "option" | "create"; option?: CreatableSelectOption; createValue?: string }[] = [
+  const items: { type: "option" | "create"; option?: CreatableSelectOption & { selected: boolean }; createValue?: string }[] = [
     ...filtered.map((o) => ({ type: "option" as const, option: o })),
     ...(showCreate ? [{ type: "create" as const, createValue: query.trim() }] : []),
   ];
@@ -113,14 +118,16 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
         <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
           {values.map((v) => {
             const opt = options.find((o) => o.value === v);
+            const label = opt?.label || v;
             return (
-              <span key={v} className="inline-flex items-center gap-1 bg-primary/10 text-primary border border-primary/20 text-xs font-medium rounded-md px-2 py-1 max-w-[200px]">
-                <span className="truncate">{opt?.label || v}</span>
+              <span key={v} className="inline-flex items-start gap-1 bg-primary/10 text-primary border border-primary/20 text-xs font-medium rounded-md px-2 py-1 max-w-full">
+                <span title={v} className="min-w-0 whitespace-normal break-all leading-4">{label}</span>
                 <button
                   type="button"
                   tabIndex={-1}
+                  aria-label={`Remove ${label}`}
                   onClick={(e) => { e.stopPropagation(); removeValue(v); }}
-                  className="flex-shrink-0 text-text-dim hover:text-text transition-colors"
+                  className="flex-shrink-0 mt-0.5 text-text-dim hover:text-text transition-colors"
                 >
                   <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
                 </button>
@@ -179,7 +186,7 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
                   <button
                     key="__create__"
                     type="button"
-                    onMouseDown={(e) => { e.preventDefault(); addValue(item.createValue!); }}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); addValue(item.createValue!); }}
                     onMouseEnter={() => setHighlighted(i)}
                     className={`w-full text-left px-4 py-2.5 transition-colors border-t border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
@@ -188,18 +195,19 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
                 );
               }
               const opt = item.option!;
-              const selected = values.includes(opt.value);
+              const selected = opt.selected;
               return (
                 <button
                   key={opt.value}
                   type="button"
-                  onMouseDown={(e) => { e.preventDefault(); toggleOption(opt.value); }}
+                  aria-pressed={selected}
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleOption(opt.value); }}
                   onMouseEnter={() => setHighlighted(i)}
                   className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between ${i === highlighted ? "bg-bg" : ""}`}
                 >
-                  <div className="min-w-0">
-                    <span className="block text-sm text-text truncate">{opt.label || opt.value}</span>
-                    {opt.description && <span className="block text-xs text-text-dim truncate">{opt.description}</span>}
+                  <div className="min-w-0 flex-1">
+                    <span title={opt.value} className="block text-sm text-text whitespace-normal break-all">{opt.label || opt.value}</span>
+                    {opt.description && <span className="block text-xs text-text-dim whitespace-normal">{opt.description}</span>}
                   </div>
                   {selected && (
                     <svg className="w-4 h-4 flex-shrink-0 text-primary ml-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>

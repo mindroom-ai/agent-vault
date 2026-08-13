@@ -69,8 +69,14 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Install frontend dependencies
+        run: cd web && npm ci
+
+      - name: Test frontend
+        run: cd web && npm test
+
       - name: Build frontend (tsc + vite)
-        run: cd web && npm ci && npm run build
+        run: cd web && npm run build
 
   # Security-critical: always run on every PR. Path-gating these would mean
   # a missed filter entry (e.g. a new //go:embed target) silently turns the
