@@ -107,7 +107,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   useLayoutEffect(() => {
     if (selectedValuesRef.current) selectedValuesRef.current.scrollTop = selectedValuesRef.current.scrollHeight;
     if (open) updatePosition();
-  }, [open, values]);
+  }, [open, values, query]);
 
   function show() {
     updatePosition();
@@ -264,9 +264,11 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                     key={`__bulk__${bulkOption.label}`}
                     id={`${listboxId}-option-${i}`}
                     type="button"
+                    tabIndex={-1}
                     role="option"
                     aria-selected={selected}
-                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleBulkOption(bulkOption); }}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    onClick={() => toggleBulkOption(bulkOption)}
                     onMouseEnter={() => setHighlighted(i)}
                     className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between border-b border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
@@ -286,9 +288,11 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                     key="__create__"
                     id={`${listboxId}-option-${i}`}
                     type="button"
+                    tabIndex={-1}
                     role="option"
                     aria-selected="false"
-                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); addValue(item.createValue!); }}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    onClick={() => addValue(item.createValue!)}
                     onMouseEnter={() => setHighlighted(i)}
                     className={`w-full text-left px-4 py-2.5 transition-colors border-t border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
@@ -303,9 +307,11 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                   key={opt.value}
                   id={`${listboxId}-option-${i}`}
                   type="button"
+                  tabIndex={-1}
                   role="option"
                   aria-selected={selected}
-                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleOption(opt.value); }}
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onClick={() => toggleOption(opt.value)}
                   onMouseEnter={() => setHighlighted(i)}
                   className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between ${i === highlighted ? "bg-bg" : ""}`}
                 >

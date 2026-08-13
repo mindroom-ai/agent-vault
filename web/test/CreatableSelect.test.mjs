@@ -21,12 +21,24 @@ Object.assign(globalThis, {
 const { default: React, act, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
 
+let wrapperTop = 100;
+let viewportHeight = 768;
+Object.defineProperty(browser, "innerHeight", { configurable: true, get: () => viewportHeight });
+Object.defineProperty(browser.HTMLElement.prototype, "scrollHeight", {
+  configurable: true,
+  get() {
+    if (this.getAttribute?.("role") === "listbox") {
+      return Math.min(256, this.querySelectorAll('[role="option"]').length * 40);
+    }
+    return 0;
+  },
+});
 browser.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
   const selectedCount = this.querySelectorAll?.('button[aria-label^="Remove "]').length ?? 0;
   const selectedValues = this.querySelector?.("[data-selected-values]");
   const visibleSelectedCount = selectedValues?.classList.contains("max-h-40") ? Math.min(selectedCount, 3) : selectedCount;
-  const bottom = 146 + visibleSelectedCount * 50;
-  return { x: 20, y: 100, top: 100, right: 420, bottom, left: 20, width: 400, height: bottom - 100, toJSON: () => ({}) };
+  const bottom = wrapperTop + 46 + visibleSelectedCount * 50;
+  return { x: 20, y: wrapperTop, top: wrapperTop, right: 420, bottom, left: 20, width: 400, height: bottom - wrapperTop, toJSON: () => ({}) };
 };
 
 const vite = await createServer({
@@ -46,6 +58,8 @@ afterEach(async () => {
   if (mountedRoot) await act(async () => mountedRoot.unmount());
   mountedRoot = undefined;
   document.body.innerHTML = "";
+  wrapperTop = 100;
+  viewportHeight = 768;
 });
 
 const scopes = [
@@ -82,6 +96,14 @@ async function mouseDown(element) {
   await act(async () => element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
 }
 
+async function clickElement(element) {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 async function setQuery(input, value) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value").set.call(input, value);
@@ -103,11 +125,11 @@ test("dropdown stays open and repositions while selecting multiple scopes", asyn
   await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
 
   assert.equal(document.querySelector('div[style*="top: 150px"]') !== null, true);
-  await mouseDown(optionButton(scopes[0]));
+  await clickElement(optionButton(scopes[0]));
   assert.equal(optionButton(scopes[0]).getAttribute("aria-selected"), "true");
   assert.equal(document.querySelector('div[style*="top: 200px"]') !== null, true);
 
-  await mouseDown(optionButton(scopes[1]));
+  await clickElement(optionButton(scopes[1]));
   assert.equal(optionButton(scopes[0]).getAttribute("aria-selected"), "true");
   assert.equal(optionButton(scopes[1]).getAttribute("aria-selected"), "true");
   assert.equal(document.querySelector('div[style*="top: 250px"]') !== null, true);
@@ -154,7 +176,7 @@ test("bulk options add missing scopes, preserve custom scopes, and keep the drop
   const input = document.querySelector("input");
   await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
 
-  await mouseDown(optionButton("ALL READ SCOPES"));
+  await clickElement(optionButton("ALL READ SCOPES"));
   const readBundle = google.scopeBundles.find((bundle) => bundle.label === "ALL READ SCOPES");
   assert.deepEqual(selectedValues(), ["custom.scope", ...readBundle.values]);
   assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-selected"), "true");
@@ -164,14 +186,14 @@ test("bulk options add missing scopes, preserve custom scopes, and keep the drop
   assert.equal(selectedValuesContainer.classList.contains("overflow-y-auto"), true);
   assert.equal(document.querySelector('div[style*="top: 300px"]') !== null, true);
 
-  await mouseDown(optionButton("ALL SCOPES"));
+  await clickElement(optionButton("ALL SCOPES"));
   const allSelectedValues = selectedValues();
   assert.equal(allSelectedValues.length, google.scopes.length + 1);
   assert.deepEqual(new Set(allSelectedValues), new Set(["custom.scope", ...google.scopes.map((scope) => scope.value)]));
   assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-selected"), "true");
   assert.equal(optionButton("ALL SCOPES").getAttribute("aria-selected"), "true");
 
-  await mouseDown(optionButton("ALL SCOPES"));
+  await clickElement(optionButton("ALL SCOPES"));
   assert.deepEqual(selectedValues(), ["custom.scope"]);
   assert.equal(optionButton("ALL SCOPES").getAttribute("aria-selected"), "false");
 
@@ -197,6 +219,44 @@ test("multiselect exposes a named combobox, listbox, and active option", async (
 
   await keyDown(input, "ArrowDown");
   assert.equal(document.getElementById(input.getAttribute("aria-activedescendant")).getAttribute("role"), "option");
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("listbox options stay out of the Tab order and activate through click", async () => {
+  const root = await mountPicker();
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  const option = optionButton(scopes[0]);
+  assert.equal(option.tabIndex, -1);
+  await act(async () => option.click());
+  assert.deepEqual(selectedValues(), [scopes[0]]);
+  assert.equal(document.querySelector('[role="listbox"]') !== null, true);
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("menu remeasures after filtering and reanchors on scroll and resize", async () => {
+  wrapperTop = 620;
+  const root = await mountPicker();
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  assert.equal(document.querySelector('[role="listbox"]').style.top, "496px");
+
+  await setQuery(input, scopes[0]);
+  assert.equal(document.querySelector('[role="listbox"]').style.top, "670px");
+
+  wrapperTop = 300;
+  await act(async () => window.dispatchEvent(new Event("scroll")));
+  assert.equal(document.querySelector('[role="listbox"]').style.top, "350px");
+
+  await setQuery(input, "");
+  viewportHeight = 400;
+  await act(async () => window.dispatchEvent(new Event("resize")));
+  assert.equal(document.querySelector('[role="listbox"]').style.top, "176px");
 
   await act(async () => root.unmount());
   mountedRoot = undefined;
