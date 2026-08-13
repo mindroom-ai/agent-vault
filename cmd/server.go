@@ -87,6 +87,9 @@ var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start an Agent Vault server",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := server.ValidateDefaultServicesEnv(); err != nil {
+			return err
+		}
 		port, _ := cmd.Flags().GetInt("port")
 		host, _ := cmd.Flags().GetString("host")
 		detach, _ := cmd.Flags().GetBool("detach")

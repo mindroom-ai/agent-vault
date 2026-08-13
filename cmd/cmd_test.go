@@ -335,6 +335,19 @@ func TestServerCmd_RefusesWhenPIDFileLive(t *testing.T) {
 	}
 }
 
+func TestServerCmd_ValidatesDefaultServicesBeforeOpeningStore(t *testing.T) {
+	t.Setenv("AGENT_VAULT_DEFAULT_SERVICES_JSON", "null")
+	t.Setenv("DATABASE_URL", "://invalid-database-url")
+
+	_, err := executeCommand("server", "--port", "0", "--mitm-port", "0")
+	if err == nil {
+		t.Fatal("expected invalid default services configuration to fail")
+	}
+	if !strings.Contains(err.Error(), "AGENT_VAULT_DEFAULT_SERVICES_JSON") {
+		t.Fatalf("expected defaults validation error before store open, got %v", err)
+	}
+}
+
 func TestEnsureServerStopped_BlocksWithDATABASE_URL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/testdb")
 	err := ensureServerStopped(false)

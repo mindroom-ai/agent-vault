@@ -43,8 +43,6 @@ func utcTimePtr(t *time.Time) *time.Time {
 	return &u
 }
 
-
-
 // nullableString returns nil for empty strings, enabling SQL NULL inserts.
 func nullableString(s string) interface{} {
 	if s == "" {
@@ -599,6 +597,56 @@ func (s *SQLStore) CreateVault(ctx context.Context, name string) (*Vault, error)
 	}
 
 	return &Vault{ID: nsID, Name: name, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+// CreateBuiltInVault atomically commits a vault, its initial broker config,
+// and the creator's admin grant.
+func (s *SQLStore) CreateBuiltInVault(ctx context.Context, p CreateBuiltInVaultParams) (*Vault, error) {
+	if p.Name == "" || p.ServicesJSON == "" {
+		return nil, fmt.Errorf("CreateBuiltInVault: name and services JSON required")
+	}
+	if p.CreatorActorID == "" || p.CreatorActorType == "" {
+		return nil, fmt.Errorf("CreateBuiltInVault: creator actor required")
+	}
+
+	vaultID := newUUID()
+	brokerConfigID := newUUID()
+	now := time.Now().UTC()
+	nowStr := s.dialect.FormatTime(now)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		s.dialect.Rebind("INSERT INTO vaults (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)"),
+		vaultID, p.Name, nowStr, nowStr,
+	); err != nil {
+		return nil, fmt.Errorf("creating vault: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		s.dialect.Rebind("INSERT INTO broker_configs (id, vault_id, services_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"),
+		brokerConfigID, vaultID, p.ServicesJSON, nowStr, nowStr,
+	); err != nil {
+		return nil, fmt.Errorf("creating broker config: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		s.dialect.Rebind(`INSERT INTO vault_grants (actor_id, actor_type, vault_id, role, created_at)
+		 VALUES (?, ?, ?, 'admin', ?)`),
+		p.CreatorActorID, p.CreatorActorType, vaultID, nowStr,
+	); err != nil {
+		return nil, fmt.Errorf("granting admin: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	return &Vault{ID: vaultID, Name: p.Name, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func (s *SQLStore) GetVault(ctx context.Context, name string) (*Vault, error) {
