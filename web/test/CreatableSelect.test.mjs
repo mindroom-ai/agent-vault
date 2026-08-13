@@ -262,6 +262,13 @@ test("keyboard navigation keeps the active option visible in an overflowing list
   assert.equal(input.getAttribute("aria-activedescendant"), optionElements[19].id);
   assert.equal(listbox.scrollTop, 680);
 
+  await keyDown(input, "Enter");
+  assert.deepEqual(selectedValues(), ["scope-19"]);
+  assert.equal(document.querySelector('[role="listbox"]') !== null, true);
+  const activeOption = document.getElementById(input.getAttribute("aria-activedescendant"));
+  assert.equal(activeOption.offsetTop >= listbox.scrollTop, true);
+  assert.equal(activeOption.offsetTop + activeOption.offsetHeight <= listbox.scrollTop + listbox.clientHeight, true);
+
   await act(async () => root.unmount());
   mountedRoot = undefined;
 });

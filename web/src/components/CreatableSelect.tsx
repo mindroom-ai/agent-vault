@@ -159,7 +159,6 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
 
   function addValue(v: string) {
     if (!v || values.includes(v)) return;
-    keyboardNavigationRef.current = false;
     onChange([...values, v]);
     setQuery("");
     setHighlighted(0);
@@ -178,7 +177,6 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
   }
 
   function toggleBulkOption(option: CreatableSelectBulkOption) {
-    keyboardNavigationRef.current = false;
     const allSelected = option.values.length > 0 && option.values.every((value) => values.includes(value));
     if (allSelected) {
       const bundleValues = new Set(option.values);
@@ -206,6 +204,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
       setHighlighted((h) => (h - 1 + items.length) % items.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
+      keyboardNavigationRef.current = true;
       const item = items[Math.min(highlighted, items.length - 1)];
       if (item.type === "create" && item.createValue) {
         addValue(item.createValue);
