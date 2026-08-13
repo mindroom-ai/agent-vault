@@ -7,9 +7,10 @@ import { ErrorBanner } from "../components/shared";
 import { DomainNotice } from "../components/DomainNotice";
 
 export default function Register() {
-  const data = useLoaderData({ from: "/register" }) as { needs_first_user?: boolean; invite_only?: boolean } | undefined;
+  const data = useLoaderData({ from: "/register" }) as { needs_first_user?: boolean; invite_only?: boolean; skip_cli_install?: boolean } | undefined;
   const isFirstUser = data?.needs_first_user ?? false;
   const isInviteOnly = !isFirstUser && (data?.invite_only ?? false);
+  const skipCLIInstall = data?.skip_cli_install ?? false;
   const [showLoginLink, setShowLoginLink] = useState(true);
 
   return (
@@ -18,7 +19,7 @@ export default function Register() {
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="flex flex-col items-center w-full">
           <div className="bg-surface rounded-2xl w-full max-w-[480px] p-10 shadow-[0_1px_3px_rgba(0,0,0,0.08),0_8px_24px_rgba(0,0,0,0.04)]">
-            {isInviteOnly ? <InviteOnlyNotice /> : <RegisterForm isFirstUser={isFirstUser} onStepChange={(step) => setShowLoginLink(step === "register")} />}
+            {isInviteOnly ? <InviteOnlyNotice /> : <RegisterForm isFirstUser={isFirstUser} skipCLIInstall={skipCLIInstall} onStepChange={(step) => setShowLoginLink(step === "register")} />}
           </div>
 
           {!isFirstUser && showLoginLink && (
@@ -147,7 +148,8 @@ function InstallCLI({ isAuthenticated }: { isAuthenticated: boolean }) {
   );
 }
 
-function RegisterForm({ isFirstUser, onStepChange }: { isFirstUser: boolean; onStepChange?: (step: string) => void }) {
+function RegisterForm({ isFirstUser, skipCLIInstall, onStepChange }: { isFirstUser: boolean; skipCLIInstall: boolean; onStepChange?: (step: string) => void }) {
+  const navigate = useNavigate();
   const [step, _setStep] = useState<"register" | "verify" | "install">("register");
   function setStep(s: "register" | "verify" | "install") {
     _setStep(s);
@@ -174,6 +176,16 @@ function RegisterForm({ isFirstUser, onStepChange }: { isFirstUser: boolean; onS
     setFormError("");
     setPasswordError("");
     setConfirmError("");
+  }
+
+  function completeRegistration(isAuthenticated: boolean) {
+    setAuthenticated(isAuthenticated);
+    setSubmitting("");
+    if (skipCLIInstall) {
+      void navigate({ to: isAuthenticated ? "/" : "/login" });
+      return;
+    }
+    setStep("install");
   }
 
   async function handleRegister(e: FormEvent) {
@@ -214,13 +226,8 @@ function RegisterForm({ isFirstUser, onStepChange }: { isFirstUser: boolean; onS
         setEmailSent(!!data.email_sent);
         setStep("verify");
         setSubmitting("");
-      } else if (data.authenticated) {
-        setAuthenticated(true);
-        setStep("install");
-        setSubmitting("");
       } else {
-        setStep("install");
-        setSubmitting("");
+        completeRegistration(!!data.authenticated);
       }
     } catch {
       setFormError("Network error. Please check your connection and try again.");
@@ -252,11 +259,7 @@ function RegisterForm({ isFirstUser, onStepChange }: { isFirstUser: boolean; onS
         return;
       }
 
-      if (data.authenticated) {
-        setAuthenticated(true);
-      }
-      setStep("install");
-      setSubmitting("");
+      completeRegistration(!!data.authenticated);
     } catch {
       setFormError("Network error. Please check your connection and try again.");
       setSubmitting("");
@@ -476,4 +479,3 @@ function RegisterForm({ isFirstUser, onStepChange }: { isFirstUser: boolean; onS
     </>
   );
 }
-

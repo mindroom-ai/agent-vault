@@ -521,7 +521,18 @@ func (s *Server) handleVaultCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns, err := s.store.CreateVault(ctx, req.Name)
+	servicesJSON, err := s.initialServicesJSON()
+	if err != nil {
+		s.logger.Error("failed to prepare default services", "vault", req.Name, "err", err.Error())
+		jsonError(w, http.StatusInternalServerError, "Failed to prepare default services")
+		return
+	}
+	ns, err := s.store.CreateBuiltInVault(ctx, store.CreateBuiltInVaultParams{
+		Name:             req.Name,
+		ServicesJSON:     servicesJSON,
+		CreatorActorID:   actor.ID,
+		CreatorActorType: actor.Type,
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
 			jsonError(w, http.StatusConflict, fmt.Sprintf("Vault %q already exists", req.Name))
@@ -530,9 +541,6 @@ func (s *Server) handleVaultCreate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "Failed to create vault")
 		return
 	}
-
-	// Creator becomes vault admin.
-	_ = s.store.GrantVaultRole(ctx, actor.ID, actor.Type, ns.ID, "admin")
 
 	s.captureEvent(r, "av.vault-create", actor, map[string]string{"vault": req.Name})
 	jsonCreated(w, map[string]interface{}{

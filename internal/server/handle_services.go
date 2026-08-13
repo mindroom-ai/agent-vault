@@ -199,22 +199,33 @@ func normalizeProposalServices(in []proposal.Service, existing []broker.Service)
 // fields via AssignSlugNames (the slug becomes durable on the next
 // write). Returns nil, nil when no config exists.
 func (s *Server) loadServices(ctx context.Context, vaultID string) ([]broker.Service, error) {
+	services, _, err := s.loadServicesWithBackfill(ctx, vaultID)
+	return services, err
+}
+
+// loadServicesWithBackfill also reports whether any missing Name fields were
+// filled so callers that may write can make the repaired names durable.
+func (s *Server) loadServicesWithBackfill(ctx context.Context, vaultID string) ([]broker.Service, bool, error) {
 	bc, err := s.store.GetBrokerConfig(ctx, vaultID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if bc == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	var services []broker.Service
 	if err := json.Unmarshal([]byte(bc.ServicesJSON), &services); err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	namesBackfilled := false
 	for i := range services {
 		services[i].Host, services[i].Path, services[i].Port = broker.SplitInlineHost(services[i].Host, services[i].Path)
+		if services[i].Name == "" {
+			namesBackfilled = true
+		}
 	}
 	broker.AssignSlugNames(services)
-	return services, nil
+	return services, namesBackfilled, nil
 }
 
 // resolveServiceRef looks up a service by name first, then by host.

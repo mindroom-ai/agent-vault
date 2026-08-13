@@ -19,6 +19,7 @@ import (
 
 	"net"
 
+	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/infisical"
@@ -59,18 +60,20 @@ type agentVaultJSON struct {
 
 // Server is the Agent Vault HTTP server.
 type Server struct {
-	httpServer    *http.Server
-	store         Store
-	encKey        []byte // 32-byte encryption key, held in memory while running
-	notifier      *notify.Notifier
-	initialized   bool                // true when at least one owner account exists
-	lastInitCheck atomic.Int64        // unix-millis of last DB check for initialization (throttle)
-	baseURL       string              // externally-reachable base URL (e.g. "https://sb.example.com")
-	skillCLI      []byte              // embedded CLI skill content (served at GET /v1/skills/cli)
-	mitm          *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
-	logger        *slog.Logger        // structured logger for per-request observability
-	rateLimit     *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
-	logSink       requestlog.Sink     // per-request persistence sink; never nil (Nop default)
+	httpServer         *http.Server
+	store              Store
+	encKey             []byte // 32-byte encryption key, held in memory while running
+	notifier           *notify.Notifier
+	initialized        bool         // true when at least one owner account exists
+	lastInitCheck      atomic.Int64 // unix-millis of last DB check for initialization (throttle)
+	baseURL            string       // externally-reachable base URL (e.g. "https://sb.example.com")
+	skillCLI           []byte       // embedded CLI skill content (served at GET /v1/skills/cli)
+	defaultServices    []broker.Service
+	defaultServicesErr error
+	mitm               *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
+	logger             *slog.Logger        // structured logger for per-request observability
+	rateLimit          *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
+	logSink            requestlog.Sink     // per-request persistence sink; never nil (Nop default)
 	// touchCache short-circuits per-request session-touch writes. With
 	// db.SetMaxOpenConns(1), every UPDATE — even a no-op — opens the
 	// single WAL writer slot. Caching the last-touch wall-clock per
@@ -279,6 +282,7 @@ type Store interface {
 
 	// Vaults
 	CreateVault(ctx context.Context, name string) (*store.Vault, error)
+	CreateBuiltInVault(ctx context.Context, p store.CreateBuiltInVaultParams) (*store.Vault, error)
 	GetVault(ctx context.Context, name string) (*store.Vault, error)
 	GetVaultByID(ctx context.Context, id string) (*store.Vault, error)
 	ListVaults(ctx context.Context) ([]store.Vault, error)
@@ -770,6 +774,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 
 	rlCfg, _ := ratelimit.LoadFromEnv()
 	rl := ratelimit.New(rlCfg)
+	defaultServices, defaultServicesErr := loadDefaultServicesFromEnv()
 
 	s := &Server{
 		httpServer: &http.Server{
@@ -780,15 +785,17 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 			WriteTimeout:      60 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		},
-		store:          store,
-		encKey:         encKey,
-		notifier:       notifier,
-		initialized:    initialized,
-		baseURL:        strings.TrimRight(baseURL, "/"),
-		logger:         logger,
-		rateLimit:      rl,
-		logSink:        requestlog.Nop{},
-		oauthRefresher: oauth.NewRefresher(),
+		store:              store,
+		encKey:             encKey,
+		notifier:           notifier,
+		initialized:        initialized,
+		baseURL:            strings.TrimRight(baseURL, "/"),
+		defaultServices:    defaultServices,
+		defaultServicesErr: defaultServicesErr,
+		logger:             logger,
+		rateLimit:          rl,
+		logSink:            requestlog.Nop{},
+		oauthRefresher:     oauth.NewRefresher(),
 	}
 
 	// Apply SSRF protection to OAuth token endpoint requests.
@@ -1000,11 +1007,16 @@ func (s *Server) Start() error {
 	}
 
 	// Bind synchronously so EADDRINUSE returns from Start() before any pidfile
-	// work happens. Keeps a foreground invocation against an already-running
-	// daemon from clobbering the daemon's PID file.
+	// or default-service reconciliation work happens. Keeps a foreground
+	// invocation against an already-running daemon from mutating persistent
+	// state or clobbering the daemon's PID file.
 	httpLn, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.httpServer.Addr, err)
+	}
+	if err := s.reconcileDefaultServices(context.Background()); err != nil {
+		_ = httpLn.Close()
+		return fmt.Errorf("reconcile default services: %w", err)
 	}
 
 	stop := make(chan os.Signal, 1)

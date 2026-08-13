@@ -117,6 +117,54 @@ func TestVaultDuplicateName(t *testing.T) {
 	}
 }
 
+func TestCreateBuiltInVaultCommitsConfigAndAdminGrant(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	servicesJSON := `[{"name":"github","host":"api.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}}]`
+
+	vault, err := s.CreateBuiltInVault(ctx, CreateBuiltInVaultParams{
+		Name:             "team-vault",
+		ServicesJSON:     servicesJSON,
+		CreatorActorID:   "user-1",
+		CreatorActorType: "user",
+	})
+	if err != nil {
+		t.Fatalf("CreateBuiltInVault: %v", err)
+	}
+	config, err := s.GetBrokerConfig(ctx, vault.ID)
+	if err != nil {
+		t.Fatalf("GetBrokerConfig: %v", err)
+	}
+	if config.ServicesJSON != servicesJSON {
+		t.Fatalf("services JSON = %q, want %q", config.ServicesJSON, servicesJSON)
+	}
+	role, err := s.GetVaultRole(ctx, "user-1", vault.ID)
+	if err != nil {
+		t.Fatalf("GetVaultRole: %v", err)
+	}
+	if role != "admin" {
+		t.Fatalf("role = %q, want admin", role)
+	}
+}
+
+func TestCreateBuiltInVaultRollsBackOnGrantFailure(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+
+	_, err := s.CreateBuiltInVault(ctx, CreateBuiltInVaultParams{
+		Name:             "rolled-back-vault",
+		ServicesJSON:     "[]",
+		CreatorActorID:   "user-1",
+		CreatorActorType: "invalid",
+	})
+	if err == nil {
+		t.Fatal("expected invalid grant to fail")
+	}
+	if _, err := s.GetVault(ctx, "rolled-back-vault"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("vault persisted after transaction failure: %v", err)
+	}
+}
+
 func TestGetVaultNotFound(t *testing.T) {
 	s := openTestDB(t)
 	ctx := context.Background()
@@ -1449,7 +1497,6 @@ func TestCascadeDeleteVaultRemovesProposals(t *testing.T) {
 	}
 }
 
-
 // --- UUID ---
 
 func TestNewUUIDUniqueness(t *testing.T) {
@@ -1676,7 +1723,6 @@ func TestDeleteUserSessions(t *testing.T) {
 		t.Fatalf("expected sql.ErrNoRows after deleting user sessions, got %v", err)
 	}
 }
-
 
 func TestDeleteUserCascadesGrants(t *testing.T) {
 	s := openTestDB(t)
@@ -1954,7 +2000,6 @@ func TestGetSessionBackwardCompat(t *testing.T) {
 		t.Fatalf("expected empty agent_id for old session, got %q", fetched.AgentID)
 	}
 }
-
 
 func TestDeleteAgentTokens(t *testing.T) {
 	s := openTestDB(t)

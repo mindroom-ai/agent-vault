@@ -281,6 +281,15 @@ type DynamicSecretLease struct {
 	CreatedAt         time.Time
 }
 
+// CreateBuiltInVaultParams carries inputs to CreateBuiltInVault. The initial
+// broker config and creator admin grant are committed with the vault.
+type CreateBuiltInVaultParams struct {
+	Name             string
+	ServicesJSON     string
+	CreatorActorID   string
+	CreatorActorType string // "user" or "agent"
+}
+
 // CreateExternalVaultParams carries inputs to CreateExternalVault. The
 // creator is persisted as an admin vault_grants row in the same transaction.
 type CreateExternalVaultParams struct {
@@ -426,6 +435,7 @@ type CAState struct {
 type Store interface {
 	// Vaults
 	CreateVault(ctx context.Context, name string) (*Vault, error)
+	CreateBuiltInVault(ctx context.Context, p CreateBuiltInVaultParams) (*Vault, error)
 	GetVault(ctx context.Context, name string) (*Vault, error)
 	GetVaultByID(ctx context.Context, id string) (*Vault, error)
 	ListVaults(ctx context.Context) ([]Vault, error)

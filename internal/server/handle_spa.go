@@ -37,6 +37,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if os.Getenv("AGENT_VAULT_ADDR") != "" {
 		resp["base_url"] = s.BaseURL()
 	}
+	if os.Getenv("AGENT_VAULT_SKIP_CLI_INSTALL") == "true" {
+		resp["skip_cli_install"] = true
+	}
 
 	// Read all settings in one query instead of two separate reads.
 	if settings, err := s.store.GetAllSettings(r.Context()); err == nil {

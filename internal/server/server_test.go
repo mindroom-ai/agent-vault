@@ -389,9 +389,9 @@ func (m *mockStore) ExpirePendingProposals(_ context.Context, before time.Time) 
 	return 0, nil
 }
 
-func (m *mockStore) Close() error                                     { return nil }
-func (m *mockStore) Ping(_ context.Context) error                      { return nil }
-func (m *mockStore) DialectName() string                               { return "sqlite" }
+func (m *mockStore) Close() error                                         { return nil }
+func (m *mockStore) Ping(_ context.Context) error                         { return nil }
+func (m *mockStore) DialectName() string                                  { return "sqlite" }
 func (m *mockStore) GetCAState(_ context.Context) (*store.CAState, error) { return nil, nil }
 func (m *mockStore) SetCAState(_ context.Context, _ *store.CAState) error { return nil }
 
@@ -507,6 +507,20 @@ func (m *mockStore) CreateVault(_ context.Context, name string) (*store.Vault, e
 	}
 	m.vaults[name] = ns
 	return ns, nil
+}
+
+func (m *mockStore) CreateBuiltInVault(ctx context.Context, p store.CreateBuiltInVaultParams) (*store.Vault, error) {
+	vault, err := m.CreateVault(ctx, p.Name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := m.SetBrokerConfig(ctx, vault.ID, p.ServicesJSON); err != nil {
+		return nil, err
+	}
+	if err := m.GrantVaultRole(ctx, p.CreatorActorID, p.CreatorActorType, vault.ID, "admin"); err != nil {
+		return nil, err
+	}
+	return vault, nil
 }
 
 func (m *mockStore) ListVaults(_ context.Context) ([]store.Vault, error) {
@@ -5006,6 +5020,43 @@ func TestInviteOnlyNotInStatusWhenDisabled(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&resp)
 	if _, ok := resp["invite_only"]; ok {
 		t.Fatal("invite_only should not appear in status when disabled")
+	}
+}
+
+func TestSkipCLIInstallAppearsInStatusWhenEnabled(t *testing.T) {
+	t.Setenv("AGENT_VAULT_SKIP_CLI_INSTALL", "true")
+	srv := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := resp["skip_cli_install"]; got != true {
+		t.Fatalf("expected skip_cli_install=true, got %v", got)
+	}
+}
+
+func TestSkipCLIInstallAbsentFromStatusByDefault(t *testing.T) {
+	t.Setenv("AGENT_VAULT_SKIP_CLI_INSTALL", "")
+	srv := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := resp["skip_cli_install"]; ok {
+		t.Fatal("skip_cli_install should not appear when disabled")
 	}
 }
 
