@@ -130,6 +130,23 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
     if (open) updatePosition();
   }, [open, values, query]);
 
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!menuOpen || !activeOptionId || !list || list.clientHeight <= 0) return;
+    const activeOption = document.getElementById(activeOptionId);
+    if (!activeOption || !list.contains(activeOption)) return;
+
+    const optionTop = activeOption.offsetTop;
+    const optionBottom = optionTop + activeOption.offsetHeight;
+    const visibleTop = list.scrollTop;
+    const visibleBottom = visibleTop + list.clientHeight;
+    if (optionTop < visibleTop) {
+      list.scrollTop = optionTop;
+    } else if (optionBottom > visibleBottom) {
+      list.scrollTop = optionBottom - list.clientHeight;
+    }
+  }, [activeOptionId, items.length, menuOpen, query]);
+
   function show() {
     updatePosition();
     setHighlighted(0);

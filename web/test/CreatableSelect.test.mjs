@@ -36,7 +36,7 @@ Object.defineProperty(browser.HTMLElement.prototype, "scrollHeight", {
   configurable: true,
   get() {
     if (this.getAttribute?.("role") === "listbox") {
-      return Math.min(256, this.querySelectorAll('[role="option"]').length * 40);
+      return this.querySelectorAll('[role="option"]').length * 40;
     }
     return 0;
   },
@@ -78,7 +78,7 @@ const scopes = [
 ];
 const options = scopes.map((value) => ({ value, description: `Description for ${value}` }));
 
-async function mountPicker(initialValues = [], bulkOptions = []) {
+async function mountPicker(initialValues = [], bulkOptions = [], pickerOptions = options) {
   document.body.innerHTML = '<div id="root" style="width: 220px"></div>';
   const root = createRoot(document.getElementById("root"));
 
@@ -87,7 +87,7 @@ async function mountPicker(initialValues = [], bulkOptions = []) {
     return React.createElement(
       React.Fragment,
       null,
-      React.createElement(CreatableSelect, { values, onChange: setValues, options, bulkOptions, placeholder: "Add scopes" }),
+      React.createElement(CreatableSelect, { values, onChange: setValues, options: pickerOptions, bulkOptions, placeholder: "Add scopes" }),
       React.createElement("output", { "data-testid": "values" }, values.join("|")),
     );
   }
@@ -234,6 +234,29 @@ test("multiselect exposes a named combobox, listbox, and active option", async (
 
   await keyDown(input, "ArrowDown");
   assert.equal(document.getElementById(input.getAttribute("aria-activedescendant")).getAttribute("role"), "option");
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
+test("keyboard navigation keeps the active option visible in an overflowing list", async () => {
+  const overflowOptions = Array.from({ length: 20 }, (_, index) => ({ value: `scope-${index}` }));
+  const root = await mountPicker([], [], overflowOptions);
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  const listbox = document.querySelector('[role="listbox"]');
+  const optionElements = [...listbox.querySelectorAll('[role="option"]')];
+  Object.defineProperty(listbox, "clientHeight", { configurable: true, value: 120 });
+  optionElements.forEach((option, index) => {
+    Object.defineProperty(option, "offsetTop", { configurable: true, value: index * 40 });
+    Object.defineProperty(option, "offsetHeight", { configurable: true, value: 40 });
+  });
+
+  assert.equal(listbox.scrollTop, 0);
+  await keyDown(input, "ArrowUp");
+  assert.equal(input.getAttribute("aria-activedescendant"), optionElements[19].id);
+  assert.equal(listbox.scrollTop, 680);
 
   await act(async () => root.unmount());
   mountedRoot = undefined;
