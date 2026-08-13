@@ -551,6 +551,7 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
   const currentProvider = OAUTH_PROVIDERS.find((p) => p.authorizationUrl === oauthAuthUrl || p.tokenUrl === oauthTokenUrl);
   const isManagedProvider = !!oauthProviderId && managedOAuthProviders.includes(oauthProviderId);
   const scopeOptions = (currentProvider?.scopes ?? []).map((s) => ({ value: s.value, description: s.description }));
+  const scopeBundles = currentProvider?.scopeBundles ?? [];
   const canSubmitStatic = entries.every((e) => e.key.trim() && e.value.trim());
   const canSubmitOAuthConnect = !!(oauthKey.trim() && oauthTokenUrl.trim() && (isManagedProvider || oauthClientId.trim()) && oauthAuthUrl.trim() && (!isManagedProvider || oauthScopes.length > 0));
   const canSubmitOAuthTokens = !!(oauthKey.trim() && (oauthAccessToken.trim() || oauthRefreshToken.trim()));
@@ -747,6 +748,7 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
                   values={oauthScopes}
                   onChange={setOauthScopes}
                   options={scopeOptions}
+                  bulkOptions={scopeBundles}
                   placeholder="Add scopes"
                 />
               </FormField>

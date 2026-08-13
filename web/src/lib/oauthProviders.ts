@@ -6,6 +6,12 @@ export interface ScopePreset {
   description: string;
 }
 
+export interface ScopeBundle {
+  label: string;
+  description: string;
+  values: string[];
+}
+
 export interface OAuthProviderPreset {
   id: string;
   name: string;
@@ -14,7 +20,43 @@ export interface OAuthProviderPreset {
   tokenAuthMethod: "client_secret_post" | "client_secret_basic";
   suggestedKey: string;
   scopes?: ScopePreset[];
+  scopeBundles?: ScopeBundle[];
 }
+
+const GOOGLE_SCOPES: ScopePreset[] = [
+  { value: "openid", description: "OpenID Connect authentication" },
+  { value: "email", description: "View user email address" },
+  { value: "profile", description: "View basic profile info" },
+  { value: "https://www.googleapis.com/auth/calendar.readonly", description: "View Google Calendar" },
+  { value: "https://www.googleapis.com/auth/calendar", description: "Manage Google Calendar" },
+  { value: "https://www.googleapis.com/auth/drive.metadata.readonly", description: "View Google Drive file metadata" },
+  { value: "https://www.googleapis.com/auth/drive.readonly", description: "View and download Google Drive files" },
+  { value: "https://www.googleapis.com/auth/drive", description: "Full access to Google Drive" },
+  { value: "https://www.googleapis.com/auth/gmail.readonly", description: "Read Gmail messages" },
+  { value: "https://www.googleapis.com/auth/gmail.modify", description: "Read and manage Gmail messages" },
+  { value: "https://www.googleapis.com/auth/spreadsheets.readonly", description: "View Google Sheets" },
+  { value: "https://www.googleapis.com/auth/spreadsheets", description: "Read and write Google Sheets" },
+  { value: "https://www.googleapis.com/auth/documents.readonly", description: "View Google Docs" },
+  { value: "https://www.googleapis.com/auth/documents", description: "Read and write Google Docs" },
+  { value: "https://www.googleapis.com/auth/presentations.readonly", description: "View Google Slides" },
+  { value: "https://www.googleapis.com/auth/presentations", description: "Read and write Google Slides" },
+  { value: "https://www.googleapis.com/auth/tasks.readonly", description: "View Google Tasks" },
+  { value: "https://www.googleapis.com/auth/tasks", description: "Manage Google Tasks" },
+  { value: "https://www.googleapis.com/auth/contacts.readonly", description: "View Google Contacts" },
+  { value: "https://www.googleapis.com/auth/contacts", description: "Manage Google Contacts" },
+  { value: "https://www.googleapis.com/auth/directory.readonly", description: "View Google Workspace directory" },
+  { value: "https://www.googleapis.com/auth/chat.spaces.readonly", description: "View Google Chat spaces" },
+  { value: "https://www.googleapis.com/auth/chat.spaces", description: "Manage Google Chat spaces" },
+  { value: "https://www.googleapis.com/auth/chat.messages.readonly", description: "View Google Chat messages" },
+  { value: "https://www.googleapis.com/auth/chat.messages.create", description: "Send Google Chat messages" },
+  { value: "https://www.googleapis.com/auth/chat.messages", description: "View and manage Google Chat messages" },
+  { value: "https://www.googleapis.com/auth/chat.memberships.readonly", description: "View Google Chat memberships" },
+  { value: "https://www.googleapis.com/auth/chat.memberships", description: "Manage Google Chat memberships" },
+];
+
+const GOOGLE_READ_SCOPES = GOOGLE_SCOPES
+  .map((scope) => scope.value)
+  .filter((value) => ["openid", "email", "profile"].includes(value) || value.endsWith(".readonly"));
 
 export const OAUTH_PROVIDERS: OAuthProviderPreset[] = [
   {
@@ -40,35 +82,18 @@ export const OAUTH_PROVIDERS: OAuthProviderPreset[] = [
     tokenUrl: "https://oauth2.googleapis.com/token",
     tokenAuthMethod: "client_secret_post",
     suggestedKey: "GOOGLE",
-    scopes: [
-      { value: "openid", description: "OpenID Connect authentication" },
-      { value: "email", description: "View user email address" },
-      { value: "profile", description: "View basic profile info" },
-      { value: "https://www.googleapis.com/auth/calendar.readonly", description: "View Google Calendar" },
-      { value: "https://www.googleapis.com/auth/calendar", description: "Manage Google Calendar" },
-      { value: "https://www.googleapis.com/auth/drive.metadata.readonly", description: "View Google Drive file metadata" },
-      { value: "https://www.googleapis.com/auth/drive.readonly", description: "View and download Google Drive files" },
-      { value: "https://www.googleapis.com/auth/drive", description: "Full access to Google Drive" },
-      { value: "https://www.googleapis.com/auth/gmail.readonly", description: "Read Gmail messages" },
-      { value: "https://www.googleapis.com/auth/gmail.modify", description: "Read and manage Gmail messages" },
-      { value: "https://www.googleapis.com/auth/spreadsheets.readonly", description: "View Google Sheets" },
-      { value: "https://www.googleapis.com/auth/spreadsheets", description: "Read and write Google Sheets" },
-      { value: "https://www.googleapis.com/auth/documents.readonly", description: "View Google Docs" },
-      { value: "https://www.googleapis.com/auth/documents", description: "Read and write Google Docs" },
-      { value: "https://www.googleapis.com/auth/presentations.readonly", description: "View Google Slides" },
-      { value: "https://www.googleapis.com/auth/presentations", description: "Read and write Google Slides" },
-      { value: "https://www.googleapis.com/auth/tasks.readonly", description: "View Google Tasks" },
-      { value: "https://www.googleapis.com/auth/tasks", description: "Manage Google Tasks" },
-      { value: "https://www.googleapis.com/auth/contacts.readonly", description: "View Google Contacts" },
-      { value: "https://www.googleapis.com/auth/contacts", description: "Manage Google Contacts" },
-      { value: "https://www.googleapis.com/auth/directory.readonly", description: "View Google Workspace directory" },
-      { value: "https://www.googleapis.com/auth/chat.spaces.readonly", description: "View Google Chat spaces" },
-      { value: "https://www.googleapis.com/auth/chat.spaces", description: "Manage Google Chat spaces" },
-      { value: "https://www.googleapis.com/auth/chat.messages.readonly", description: "View Google Chat messages" },
-      { value: "https://www.googleapis.com/auth/chat.messages.create", description: "Send Google Chat messages" },
-      { value: "https://www.googleapis.com/auth/chat.messages", description: "View and manage Google Chat messages" },
-      { value: "https://www.googleapis.com/auth/chat.memberships.readonly", description: "View Google Chat memberships" },
-      { value: "https://www.googleapis.com/auth/chat.memberships", description: "Manage Google Chat memberships" },
+    scopes: GOOGLE_SCOPES,
+    scopeBundles: [
+      {
+        label: "ALL SCOPES",
+        description: "Select every available Google scope",
+        values: GOOGLE_SCOPES.map((scope) => scope.value),
+      },
+      {
+        label: "ALL READ SCOPES",
+        description: "Select identity and read-only Google scopes",
+        values: GOOGLE_READ_SCOPES,
+      },
     ],
   },
   {
