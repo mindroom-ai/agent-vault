@@ -313,7 +313,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                     role="option"
                     aria-selected={selected}
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                    onClick={() => toggleBulkOption(bulkOption)}
+                    onClick={() => { keyboardNavigationRef.current = false; toggleBulkOption(bulkOption); }}
                     onMouseEnter={() => { keyboardNavigationRef.current = false; setHighlighted(i); }}
                     className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between border-b border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
@@ -337,7 +337,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                     role="option"
                     aria-selected="false"
                     onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                    onClick={() => addValue(item.createValue!)}
+                    onClick={() => { keyboardNavigationRef.current = false; addValue(item.createValue!); }}
                     onMouseEnter={() => { keyboardNavigationRef.current = false; setHighlighted(i); }}
                     className={`w-full text-left px-4 py-2.5 transition-colors border-t border-border ${i === highlighted ? "bg-bg" : ""}`}
                   >
@@ -356,7 +356,7 @@ export default function CreatableSelect({ values, onChange, options = [], bulkOp
                   role="option"
                   aria-selected={selected}
                   onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                  onClick={() => toggleOption(opt.value)}
+                  onClick={() => { keyboardNavigationRef.current = false; toggleOption(opt.value); }}
                   onMouseEnter={() => { keyboardNavigationRef.current = false; setHighlighted(i); }}
                   className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between ${i === highlighted ? "bg-bg" : ""}`}
                 >

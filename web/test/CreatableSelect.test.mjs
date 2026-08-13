@@ -302,6 +302,35 @@ test("mouse interaction does not auto-scroll a partially clipped option", async 
   mountedRoot = undefined;
 });
 
+test("pointer activation clears stale keyboard scroll intent", async () => {
+  const overflowOptions = Array.from({ length: 20 }, (_, index) => ({ value: `scope-${index}` }));
+  const root = await mountPicker(["scope-2"], [], overflowOptions);
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  const listbox = document.querySelector('[role="listbox"]');
+  const optionElements = [...listbox.querySelectorAll('[role="option"]')];
+  Object.defineProperty(listbox, "clientHeight", { configurable: true, value: 120 });
+  optionElements.forEach((option, index) => {
+    Object.defineProperty(option, "offsetTop", { configurable: true, value: index * 40 });
+    Object.defineProperty(option, "offsetHeight", { configurable: true, value: 40 });
+  });
+  listbox.scrollTop = 100;
+
+  const clippedOption = optionElements[2];
+  await mouseEnter(clippedOption);
+  await keyDown(input, "Enter");
+  assert.deepEqual(selectedValues(), []);
+  assert.equal(listbox.scrollTop, 100);
+
+  await clickElement(clippedOption);
+  assert.deepEqual(selectedValues(), ["scope-2"]);
+  assert.equal(listbox.scrollTop, 100);
+
+  await act(async () => root.unmount());
+  mountedRoot = undefined;
+});
+
 test("listbox options stay out of the Tab order and activate through click", async () => {
   const root = await mountPicker();
   const input = document.querySelector("input");
