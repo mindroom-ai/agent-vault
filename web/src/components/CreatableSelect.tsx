@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export interface CreatableSelectOption {
@@ -14,7 +14,7 @@ interface CreatableSelectProps {
   placeholder?: string;
 }
 
-export function getVisibleOptions(options: CreatableSelectOption[], values: string[], query: string) {
+function getVisibleOptions(options: CreatableSelectOption[], values: string[], query: string) {
   const q = query.trim().toLowerCase();
   const filtered = q
     ? options.filter((o) => o.value.toLowerCase().includes(q) || o.label?.toLowerCase().includes(q) || o.description?.toLowerCase().includes(q))
@@ -55,11 +55,19 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  function show() {
+  function updatePosition() {
     if (wrapperRef.current) {
       const rect = wrapperRef.current.getBoundingClientRect();
       setPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
     }
+  }
+
+  useLayoutEffect(() => {
+    if (open) updatePosition();
+  }, [open, values]);
+
+  function show() {
+    updatePosition();
     setHighlighted(0);
     setOpen(true);
   }
