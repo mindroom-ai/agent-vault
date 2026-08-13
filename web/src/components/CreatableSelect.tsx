@@ -7,10 +7,17 @@ export interface CreatableSelectOption {
   description?: string;
 }
 
+export interface CreatableSelectBulkOption {
+  label: string;
+  description?: string;
+  values: string[];
+}
+
 interface CreatableSelectProps {
   values: string[];
   onChange: (values: string[]) => void;
   options?: CreatableSelectOption[];
+  bulkOptions?: CreatableSelectBulkOption[];
   placeholder?: string;
 }
 
@@ -22,7 +29,7 @@ function getVisibleOptions(options: CreatableSelectOption[], values: string[], q
   return filtered.map((option) => ({ ...option, selected: values.includes(option.value) }));
 }
 
-export default function CreatableSelect({ values, onChange, options = [], placeholder }: CreatableSelectProps) {
+export default function CreatableSelect({ values, onChange, options = [], bulkOptions = [], placeholder }: CreatableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
@@ -32,11 +39,22 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
   const [pos, setPos] = useState({ top: 0, left: 0, width: 0 });
 
   const q = query.trim().toLowerCase();
+  const filteredBulkOptions = q
+    ? bulkOptions.filter((option) => option.label.toLowerCase().includes(q) || option.description?.toLowerCase().includes(q))
+    : bulkOptions;
   const filtered = getVisibleOptions(options, values, query);
-  const exactMatch = options.some((o) => o.value.toLowerCase() === q) || values.some((v) => v.toLowerCase() === q);
+  const exactMatch = options.some((o) => o.value.toLowerCase() === q)
+    || bulkOptions.some((option) => option.label.toLowerCase() === q)
+    || values.some((v) => v.toLowerCase() === q);
   const showCreate = q && !exactMatch;
 
-  const items: { type: "option" | "create"; option?: CreatableSelectOption & { selected: boolean }; createValue?: string }[] = [
+  const items: {
+    type: "bulk" | "option" | "create";
+    bulkOption?: CreatableSelectBulkOption;
+    option?: CreatableSelectOption & { selected: boolean };
+    createValue?: string;
+  }[] = [
+    ...filteredBulkOptions.map((bulkOption) => ({ type: "bulk" as const, bulkOption })),
     ...filtered.map((o) => ({ type: "option" as const, option: o })),
     ...(showCreate ? [{ type: "create" as const, createValue: query.trim() }] : []),
   ];
@@ -91,6 +109,18 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
     }
   }
 
+  function toggleBulkOption(option: CreatableSelectBulkOption) {
+    const allSelected = option.values.length > 0 && option.values.every((value) => values.includes(value));
+    if (allSelected) {
+      const bundleValues = new Set(option.values);
+      onChange(values.filter((value) => !bundleValues.has(value)));
+    } else {
+      onChange([...values, ...option.values.filter((value) => !values.includes(value))]);
+    }
+    setQuery("");
+    setHighlighted(0);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Backspace" && !query && values.length > 0) {
       onChange(values.slice(0, -1));
@@ -108,6 +138,8 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
       const item = items[Math.min(highlighted, items.length - 1)];
       if (item.type === "create" && item.createValue) {
         addValue(item.createValue);
+      } else if (item.type === "bulk" && item.bulkOption) {
+        toggleBulkOption(item.bulkOption);
       } else if (item.type === "option" && item.option) {
         toggleOption(item.option.value);
       }
@@ -189,6 +221,28 @@ export default function CreatableSelect({ values, onChange, options = [], placeh
             style={{ top: pos.top, left: pos.left, width: pos.width, scrollbarWidth: "thin", scrollbarColor: "var(--color-border) var(--color-surface)" }}
           >
             {items.map((item, i) => {
+              if (item.type === "bulk") {
+                const bulkOption = item.bulkOption!;
+                const selected = bulkOption.values.length > 0 && bulkOption.values.every((value) => values.includes(value));
+                return (
+                  <button
+                    key={`__bulk__${bulkOption.label}`}
+                    type="button"
+                    aria-pressed={selected}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleBulkOption(bulkOption); }}
+                    onMouseEnter={() => setHighlighted(i)}
+                    className={`w-full text-left px-4 py-2.5 transition-colors flex items-center justify-between border-b border-border ${i === highlighted ? "bg-bg" : ""}`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-text">{bulkOption.label}</span>
+                      {bulkOption.description && <span className="block text-xs text-text-dim whitespace-normal">{bulkOption.description}</span>}
+                    </div>
+                    {selected && (
+                      <svg className="w-4 h-4 flex-shrink-0 text-primary ml-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                    )}
+                  </button>
+                );
+              }
               if (item.type === "create") {
                 return (
                   <button

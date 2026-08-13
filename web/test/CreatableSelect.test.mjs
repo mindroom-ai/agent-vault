@@ -34,6 +34,7 @@ const vite = await createServer({
   optimizeDeps: { noDiscovery: true },
 });
 const { default: CreatableSelect } = await vite.ssrLoadModule("/src/components/CreatableSelect.tsx");
+const { OAUTH_PROVIDERS } = await vite.ssrLoadModule("/src/lib/oauthProviders.ts");
 
 after(() => vite.close());
 
@@ -44,13 +45,18 @@ const scopes = [
 ];
 const options = scopes.map((value) => ({ value, description: `Description for ${value}` }));
 
-async function mountPicker(initialValues = []) {
+async function mountPicker(initialValues = [], bulkOptions = []) {
   document.body.innerHTML = '<div id="root" style="width: 220px"></div>';
   const root = createRoot(document.getElementById("root"));
 
   function Harness() {
     const [values, setValues] = useState(initialValues);
-    return React.createElement(CreatableSelect, { values, onChange: setValues, options, placeholder: "Add scopes" });
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(CreatableSelect, { values, onChange: setValues, options, bulkOptions, placeholder: "Add scopes" }),
+      React.createElement("output", { "data-testid": "values" }, values.join("|")),
+    );
   }
 
   await act(async () => root.render(React.createElement(Harness)));
@@ -65,9 +71,13 @@ async function mouseDown(element) {
   await act(async () => element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
 }
 
+function selectedValues() {
+  return document.querySelector('[data-testid="values"]').textContent.split("|").filter(Boolean);
+}
+
 test("dropdown stays open and repositions while selecting multiple scopes", async () => {
   const root = await mountPicker();
-  const input = document.querySelector('input[placeholder="Add scopes"]');
+  const input = document.querySelector("input");
   await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
 
   assert.equal(document.querySelector('div[style*="top: 150px"]') !== null, true);
@@ -96,6 +106,46 @@ test("selected chips and suggestions expose full scope values without truncation
     assert.equal(label.classList.contains("truncate"), false);
   }
   assert.equal(labels[0].parentElement.classList.contains("max-w-[200px]"), false);
+
+  await act(async () => root.unmount());
+});
+
+test("Google exposes complete all-scope and read-only bundles", () => {
+  const google = OAUTH_PROVIDERS.find((provider) => provider.id === "google");
+  const allScopes = google.scopeBundles.find((bundle) => bundle.label === "ALL SCOPES");
+  const readScopes = google.scopeBundles.find((bundle) => bundle.label === "ALL READ SCOPES");
+
+  assert.deepEqual(allScopes.values, google.scopes.map((scope) => scope.value));
+  assert.deepEqual(
+    readScopes.values,
+    google.scopes
+      .map((scope) => scope.value)
+      .filter((value) => ["openid", "email", "profile"].includes(value) || value.endsWith(".readonly")),
+  );
+});
+
+test("bulk options add missing scopes, preserve custom scopes, and keep the dropdown open", async () => {
+  const google = OAUTH_PROVIDERS.find((provider) => provider.id === "google");
+  const root = await mountPicker(["custom.scope"], google.scopeBundles);
+  const input = document.querySelector("input");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+
+  await mouseDown(optionButton("ALL READ SCOPES"));
+  const readBundle = google.scopeBundles.find((bundle) => bundle.label === "ALL READ SCOPES");
+  assert.deepEqual(selectedValues(), ["custom.scope", ...readBundle.values]);
+  assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-pressed"), "true");
+  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-pressed"), "false");
+
+  await mouseDown(optionButton("ALL SCOPES"));
+  const allSelectedValues = selectedValues();
+  assert.equal(allSelectedValues.length, google.scopes.length + 1);
+  assert.deepEqual(new Set(allSelectedValues), new Set(["custom.scope", ...google.scopes.map((scope) => scope.value)]));
+  assert.equal(optionButton("ALL READ SCOPES").getAttribute("aria-pressed"), "true");
+  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-pressed"), "true");
+
+  await mouseDown(optionButton("ALL SCOPES"));
+  assert.deepEqual(selectedValues(), ["custom.scope"]);
+  assert.equal(optionButton("ALL SCOPES").getAttribute("aria-pressed"), "false");
 
   await act(async () => root.unmount());
 });
