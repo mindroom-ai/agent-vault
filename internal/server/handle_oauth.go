@@ -367,30 +367,53 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Resolve OAuth config: use request fields, fall back to existing config.
-	existing, _ := s.store.GetCredentialOAuth(ctx, ns.ID, req.Key)
+	existing, err := s.store.GetCredentialOAuth(ctx, ns.ID, req.Key)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		jsonError(w, http.StatusInternalServerError, "Failed to load OAuth configuration")
+		return
+	}
 	tokenURL := req.TokenURL
 	clientID := req.ClientID
 	clientSecret := req.ClientSecret
 	tokenAuthMethod := req.TokenAuthMethod
+	managedProvider, existingManaged, managedErr := s.managedOAuthProviderForConfig(existing)
+	if managedErr != nil {
+		jsonError(w, http.StatusBadRequest, "Stored managed OAuth configuration is invalid")
+		return
+	}
 	if existing != nil {
-		if tokenURL == "" {
-			tokenURL = existing.TokenURL
-		}
-		if clientID == "" {
-			clientID = existing.ClientID
-		}
-		// Only reuse stored secrets when the provider config hasn't changed.
-		// If the caller sends a different token_url, don't send stored secrets
-		// to the new endpoint (prevents client secret exfiltration).
-		providerUnchanged := tokenURL == existing.TokenURL
-		if clientSecret == "" && providerUnchanged {
-			resolvedSecret, resolveErr := s.oauthClientSecret(existing)
-			if resolveErr == nil {
-				clientSecret = resolvedSecret
+		if existingManaged {
+			if (tokenURL != "" && tokenURL != managedProvider.TokenURL) ||
+				(clientID != "" && clientID != managedProvider.ClientID) ||
+				(tokenAuthMethod != "" && tokenAuthMethod != managedProvider.TokenAuthMethod) ||
+				(clientSecret != "" && clientSecret != oauthSecretSentinel) {
+				jsonError(w, http.StatusBadRequest, "Managed OAuth provider settings cannot be overridden")
+				return
 			}
-		}
-		if tokenAuthMethod == "" {
-			tokenAuthMethod = existing.TokenAuthMethod
+			tokenURL = managedProvider.TokenURL
+			clientID = managedProvider.ClientID
+			clientSecret = managedProvider.ClientSecret
+			tokenAuthMethod = managedProvider.TokenAuthMethod
+		} else {
+			if tokenURL == "" {
+				tokenURL = existing.TokenURL
+			}
+			if clientID == "" {
+				clientID = existing.ClientID
+			}
+			// Only reuse stored secrets when the provider config hasn't changed.
+			// If the caller sends a different token_url, don't send stored secrets
+			// to the new endpoint (prevents client secret exfiltration).
+			providerUnchanged := tokenURL == existing.TokenURL
+			if clientSecret == "" && providerUnchanged {
+				resolvedSecret, resolveErr := s.oauthClientSecret(existing)
+				if resolveErr == nil {
+					clientSecret = resolvedSecret
+				}
+			}
+			if tokenAuthMethod == "" {
+				tokenAuthMethod = existing.TokenAuthMethod
+			}
 		}
 	}
 
@@ -432,12 +455,7 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		}
 
 		var clientSecretCT, clientSecretNonce []byte
-		_, managedProvider, resolveErr := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(existing)
-		if resolveErr != nil {
-			jsonError(w, http.StatusBadRequest, "Stored managed OAuth configuration is invalid")
-			return
-		}
-		if clientSecret != "" && !managedProvider {
+		if clientSecret != "" && !existingManaged {
 			clientSecretCT, clientSecretNonce, err = crypto.Encrypt([]byte(clientSecret), s.encKey)
 			if err != nil {
 				jsonError(w, http.StatusInternalServerError, "Encryption failed")
@@ -462,7 +480,13 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 			ClientSecretNonce: clientSecretNonce,
 			TokenAuthMethod:   tokenAuthMethod,
 		}
-		if existing != nil {
+		if existingManaged {
+			oauthRow.ManagedProvider = &managedProvider.ID
+			oauthRow.AuthorizationURL = managedProvider.AuthorizationURL
+			oauthRow.Scopes = existing.Scopes
+			oauthRow.ScopeSeparator = " "
+			oauthRow.DisablePKCE = false
+		} else if existing != nil {
 			oauthRow.ManagedProvider = existing.ManagedProvider
 			oauthRow.AuthorizationURL = existing.AuthorizationURL
 			oauthRow.Scopes = existing.Scopes

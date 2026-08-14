@@ -322,6 +322,8 @@ func TestSafeTokenErrorCodeRejectsArbitraryProviderValues(t *testing.T) {
 		`{"error":"ghr_refresh-token-material"}`,
 		`{"error":"operator-client-secret"}`,
 		`{"error":"unknown_provider_detail"}`,
+		`{"error_description":"missing error key"}`,
+		`upstream returned ghu_access-token-material`,
 	} {
 		if got := safeTokenErrorCode([]byte(body)); got != "" {
 			t.Errorf("safeTokenErrorCode(%s) = %q, want empty", body, got)
@@ -329,6 +331,21 @@ func TestSafeTokenErrorCodeRejectsArbitraryProviderValues(t *testing.T) {
 	}
 	if got := safeTokenErrorCode([]byte(`{"error":"invalid_grant"}`)); got != "invalid_grant" {
 		t.Fatalf("safeTokenErrorCode(valid code) = %q, want invalid_grant", got)
+	}
+}
+
+func TestSafeTokenErrorCodePreservesGitHubCodes(t *testing.T) {
+	for _, code := range []string{
+		"bad_refresh_token",
+		"bad_verification_code",
+		"incorrect_client_credentials",
+		"redirect_uri_mismatch",
+		"unverified_user_email",
+	} {
+		body := []byte(`{"error":"` + code + `","error_description":"provider detail"}`)
+		if got := safeTokenErrorCode(body); got != code {
+			t.Errorf("safeTokenErrorCode(%q) = %q, want %q", body, got, code)
+		}
 	}
 }
 

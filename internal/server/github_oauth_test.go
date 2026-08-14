@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +20,15 @@ type oauthRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f oauthRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type oauthReadErrorStore struct {
+	Store
+	err error
+}
+
+func (s oauthReadErrorStore) GetCredentialOAuth(context.Context, string, string) (*store.CredentialOAuth, error) {
+	return nil, s.err
 }
 
 func TestManagedGitHubOAuthLifecycleUsesSelectedVaultAndEncryptedTokens(t *testing.T) {
@@ -377,5 +388,134 @@ func TestOAuthAccessOnlyUploadPersistsExplicitUnmanagedProvenance(t *testing.T) 
 	}
 	if config.ManagedProvider == nil || *config.ManagedProvider != "" {
 		t.Fatalf("manual OAuth provenance = %v, want explicit unmanaged marker", config.ManagedProvider)
+	}
+}
+
+func TestManagedOAuthTokenUploadRejectsProviderOverridesBeforeRefresh(t *testing.T) {
+	tests := []struct {
+		name       string
+		override   map[string]string
+		accessOnly bool
+	}{
+		{name: "token URL", override: map[string]string{"token_url": "https://attacker.example/token"}},
+		{name: "client ID", override: map[string]string{"client_id": "attacker-client-id"}},
+		{name: "client secret", override: map[string]string{"client_secret": "attacker-client-secret"}},
+		{name: "token auth method", override: map[string]string{"token_auth_method": "client_secret_basic"}},
+		{name: "access-only token URL", override: map[string]string{"token_url": "https://attacker.example/token"}, accessOnly: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ms, sessionToken := setupMockStoreWithSession(t)
+			srv := newTestServer(withStore(ms), withEncKey(make([]byte, 32)))
+			provider := testManagedGitHubProvider()
+			srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+			managedProvider := provider.ID
+			if err := ms.SetCredentialOAuth(t.Context(), &store.CredentialOAuth{
+				VaultID:          "root-ns-id",
+				CredentialKey:    "GITHUB_TOKEN",
+				ManagedProvider:  &managedProvider,
+				AuthorizationURL: provider.AuthorizationURL,
+				TokenURL:         provider.TokenURL,
+				ClientID:         provider.ClientID,
+				ScopeSeparator:   " ",
+				TokenAuthMethod:  provider.TokenAuthMethod,
+			}); err != nil {
+				t.Fatalf("SetCredentialOAuth: %v", err)
+			}
+
+			refreshCalls := 0
+			oldTokenClient := oauth.TokenClient
+			oauth.TokenClient = &http.Client{Transport: oauthRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				refreshCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"access_token":"attacker-endpoint-token"}`)),
+					Request:    req,
+				}, nil
+			})}
+			t.Cleanup(func() { oauth.TokenClient = oldTokenClient })
+
+			payload := map[string]string{"vault": "default", "key": "GITHUB_TOKEN"}
+			if tc.accessOnly {
+				payload["access_token"] = "replacement-access-token"
+			} else {
+				payload["refresh_token"] = "new-refresh-token"
+			}
+			for key, value := range tc.override {
+				payload[key] = value
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/credentials/oauth/tokens", strings.NewReader(string(body)))
+			req.Header.Set("Authorization", "Bearer "+sessionToken)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("token upload override: code = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if refreshCalls != 0 {
+				t.Fatalf("managed provider override reached token endpoint %d time(s)", refreshCalls)
+			}
+			config, err := ms.GetCredentialOAuth(t.Context(), "root-ns-id", "GITHUB_TOKEN")
+			if err != nil {
+				t.Fatalf("GetCredentialOAuth: %v", err)
+			}
+			if config.ManagedProvider == nil || *config.ManagedProvider != provider.ID ||
+				config.TokenURL != provider.TokenURL || config.ClientID != provider.ClientID {
+				t.Fatalf("managed OAuth config changed after rejected override: %+v", config)
+			}
+		})
+	}
+}
+
+func TestOAuthTokenUploadFailsClosedWhenExistingConfigReadFails(t *testing.T) {
+	ms, sessionToken := setupMockStoreWithSession(t)
+	provider := testManagedGitHubProvider()
+
+	managedProvider := provider.ID
+	if err := ms.SetCredentialOAuth(t.Context(), &store.CredentialOAuth{
+		VaultID:          "root-ns-id",
+		CredentialKey:    "GITHUB_TOKEN",
+		ManagedProvider:  &managedProvider,
+		AuthorizationURL: provider.AuthorizationURL,
+		TokenURL:         provider.TokenURL,
+		ClientID:         provider.ClientID,
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  provider.TokenAuthMethod,
+	}); err != nil {
+		t.Fatalf("SetCredentialOAuth: %v", err)
+	}
+	srv := newTestServer(withStore(oauthReadErrorStore{Store: ms, err: errors.New("oauth config read failed")}), withEncKey(make([]byte, 32)))
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/credentials/oauth/tokens", strings.NewReader(`{
+		"vault":"default",
+		"key":"GITHUB_TOKEN",
+		"access_token":"replacement-token",
+		"token_url":"https://attacker.example/token",
+		"client_id":"attacker-client-id"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("token upload after config read failure: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	config, err := ms.GetCredentialOAuth(t.Context(), "root-ns-id", "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredentialOAuth: %v", err)
+	}
+	if config.ManagedProvider == nil || *config.ManagedProvider != provider.ID ||
+		config.TokenURL != provider.TokenURL || config.ClientID != provider.ClientID {
+		t.Fatalf("managed OAuth config changed after read failure: %+v", config)
 	}
 }

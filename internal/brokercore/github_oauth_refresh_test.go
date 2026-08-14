@@ -57,7 +57,7 @@ func TestManagedGitHubOAuthRefreshRotatesEncryptedTokensForGitSmartHTTP(t *testi
 		Auth: broker.Auth{Type: "basic", Username: "GITHUB_TOKEN", Password: "GITHUB_TOKEN"},
 	}})
 	credentialStore.setCred(t, key, "vault-id", "GITHUB_TOKEN", "ghu_old-access")
-	credentialStore.creds["vault-id|GITHUB_TOKEN"].Type = "oauth"
+	credentialStore.setCredType(t, "vault-id", "GITHUB_TOKEN", "oauth")
 
 	oldRefreshCT, oldRefreshNonce, err := crypto.Encrypt([]byte("ghr_old-refresh"), key)
 	if err != nil {

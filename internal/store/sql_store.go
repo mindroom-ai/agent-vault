@@ -2080,17 +2080,28 @@ func (s *SQLStore) ApplyProposal(ctx context.Context, vaultID string, proposalID
 	// 2. Upsert each static credential.
 	for key, enc := range credentials {
 		id := newUUID()
-		_, err = tx.ExecContext(ctx,
+		// The conflict predicate is the atomic type boundary: a concurrent
+		// OAuth connect either wins first and blocks this update, or commits
+		// after this transaction and remains authoritative.
+		res, upsertErr := tx.ExecContext(ctx,
 			s.dialect.Rebind(`INSERT INTO credentials (id, vault_id, key, type, ciphertext, nonce, created_at, updated_at)
 			 VALUES (?, ?, ?, 'static', ?, ?, ?, ?)
 			 ON CONFLICT(vault_id, key) DO UPDATE SET
 			   ciphertext = excluded.ciphertext,
 			   nonce = excluded.nonce,
-			   updated_at = excluded.updated_at`),
+			   updated_at = excluded.updated_at
+			 WHERE credentials.type != 'oauth'`),
 			id, vaultID, key, enc.Ciphertext, enc.Nonce, nowStr, nowStr,
 		)
-		if err != nil {
-			return fmt.Errorf("upserting credential %q: %w", key, err)
+		if upsertErr != nil {
+			return fmt.Errorf("upserting credential %q: %w", key, upsertErr)
+		}
+		rowsAffected, rowsErr := res.RowsAffected()
+		if rowsErr != nil {
+			return fmt.Errorf("checking credential %q upsert: %w", key, rowsErr)
+		}
+		if rowsAffected == 0 {
+			return fmt.Errorf("oauth credential %q cannot be replaced with a static value through a proposal", key)
 		}
 	}
 
@@ -2118,7 +2129,9 @@ func (s *SQLStore) ApplyProposal(ctx context.Context, vaultID string, proposalID
 		if scopeSep == "" {
 			scopeSep = " "
 		}
-		_, err = tx.ExecContext(ctx,
+		// Keep the provenance check in the conflict update itself. A separate
+		// SELECT would race a concurrent managed-provider connect on Postgres.
+		oauthResult, upsertErr := tx.ExecContext(ctx,
 			s.dialect.Rebind(`INSERT INTO credential_oauth (vault_id, credential_key, managed_provider, authorization_url, token_url, client_id,
 			   client_secret_ct, client_secret_nonce, scopes, scope_separator, disable_pkce, token_auth_method,
 			   created_at, updated_at)
@@ -2146,13 +2159,21 @@ func (s *SQLStore) ApplyProposal(ctx context.Context, vaultID string, proposalID
 			     THEN credential_oauth.token_expires_at ELSE NULL END,
 			   connected_at = CASE WHEN excluded.token_url = credential_oauth.token_url
 			     THEN credential_oauth.connected_at ELSE NULL END,
-			   updated_at = excluded.updated_at`),
+			   updated_at = excluded.updated_at
+			 WHERE credential_oauth.managed_provider IS NULL OR credential_oauth.managed_provider = ''`),
 			vaultID, oc.Key, "", nullableString(oc.AuthorizationURL), oc.TokenURL, oc.ClientID,
 			oc.ClientSecretCT, oc.ClientSecretNonce, nullableString(oc.Scopes), scopeSep, disablePKCE, tokenAuthMethod,
 			nowStr, nowStr,
 		)
-		if err != nil {
-			return fmt.Errorf("upserting credential_oauth %q: %w", oc.Key, err)
+		if upsertErr != nil {
+			return fmt.Errorf("upserting credential_oauth %q: %w", oc.Key, upsertErr)
+		}
+		rowsAffected, rowsErr := oauthResult.RowsAffected()
+		if rowsErr != nil {
+			return fmt.Errorf("checking oauth credential %q upsert: %w", oc.Key, rowsErr)
+		}
+		if rowsAffected == 0 {
+			return fmt.Errorf("oauth credential %q is managed and cannot be replaced through a proposal", oc.Key)
 		}
 	}
 

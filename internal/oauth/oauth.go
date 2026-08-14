@@ -195,8 +195,8 @@ func doTokenRequest(req *http.Request) (*TokenResponse, error) {
 	return &tok, nil
 }
 
-// safeTokenErrorCode preserves standard machine-readable OAuth error codes
-// without retaining arbitrary provider text that may echo token material.
+// safeTokenErrorCode preserves known machine-readable OAuth error codes without
+// retaining arbitrary provider text that may echo token material.
 func safeTokenErrorCode(body []byte) string {
 	var payload struct {
 		Error string `json:"error"`
@@ -207,7 +207,9 @@ func safeTokenErrorCode(body []byte) string {
 	switch payload.Error {
 	case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
 		"unsupported_grant_type", "invalid_scope", "access_denied",
-		"unsupported_response_type", "server_error", "temporarily_unavailable":
+		"unsupported_response_type", "server_error", "temporarily_unavailable",
+		"bad_refresh_token", "bad_verification_code", "incorrect_client_credentials",
+		"redirect_uri_mismatch", "unverified_user_email":
 		return payload.Error
 	default:
 		return ""

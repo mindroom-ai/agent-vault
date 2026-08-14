@@ -80,6 +80,15 @@ func (f *fakeCredStore) setCred(t *testing.T, key32 []byte, vaultID, key, plaint
 	}
 }
 
+func (f *fakeCredStore) setCredType(t *testing.T, vaultID, key, credentialType string) {
+	t.Helper()
+	credential, ok := f.creds[vaultID+"|"+key]
+	if !ok {
+		t.Fatalf("setCredType: credential %s/%s not found", vaultID, key)
+	}
+	credential.Type = credentialType
+}
+
 func (f *fakeCredStore) setServices(t *testing.T, vaultID string, svcs []broker.Service) {
 	t.Helper()
 	b, err := json.Marshal(svcs)
