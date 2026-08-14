@@ -103,7 +103,7 @@ There are two ways to set up an OAuth credential:
 
 ### Connect flow (human completes OAuth consent in the browser)
 
-Use when you know the provider's OAuth URLs. During approval, the human chooses an instance-managed provider when one is available; otherwise they enter their own client ID/secret. They then click "Connect" to complete consent.
+Use when you know the provider's OAuth URLs. During approval, the human chooses an instance-managed provider when one is available; otherwise they enter their own client ID/secret. They then click "Connect" to complete consent. Managed GitHub App authorization uses the operator's client, sends no classic OAuth scopes, and defaults to the `GITHUB_TOKEN` key so existing GitHub API or Git smart-HTTP services can reuse the per-user token in place of a PAT.
 
 ```bash
 agent-vault vault proposal create -f - --json <<'EOF'
@@ -129,7 +129,7 @@ EOF
 OAuth config fields:
 - `authorization_url` (required for connect flow): the provider's consent page URL
 - `token_url` (required): where to exchange the code for tokens
-- `scopes`: space-separated permissions to request; at least one scope is required for instance-managed providers such as Google, but self-configured providers may omit it to use provider defaults
+- `scopes`: space-separated permissions to request; at least one scope is required for managed Google, managed GitHub ignores this field because GitHub App user tokens use app permissions instead, and self-configured providers may omit it to use provider defaults
 - `client_id`, `client_secret`: provided by the human during approval, not in the proposal
 
 ### Token upload (human pastes tokens they already have)
@@ -163,11 +163,13 @@ After the human approves an OAuth proposal, they may still need to complete the 
 
 ## Reading credentials
 
-To read a stored credential value (e.g. for writing config files or passing to tools that don't go through the proxy):
+To read a stored static or dynamic credential value (e.g. for writing config files or passing to tools that don't go through the proxy):
 
 ```bash
 agent-vault vault credential get <key>
 ```
+
+OAuth access and refresh tokens are broker-only. `credential get` and `credential list --reveal` never return them; route the target request through Agent Vault instead.
 
 ## Dynamic secrets (Infisical-backed vaults)
 

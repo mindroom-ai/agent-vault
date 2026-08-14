@@ -51,6 +51,15 @@ func nullableString(s string) interface{} {
 	return s
 }
 
+// nullableStringPointer preserves the distinction between a legacy SQL NULL
+// and an explicitly stored empty string.
+func nullableStringPointer(s *string) interface{} {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
 // newPublicID returns a short, opaque, URL-safe handle (80 random bits as
 // 20 hex chars). Used as the {id} path parameter in /v1/auth/sessions/{id}
 // so the underlying token hash never appears in logs or URLs.
@@ -810,14 +819,14 @@ func (s *SQLStore) DeleteCredential(ctx context.Context, vaultID, key string) er
 
 func (s *SQLStore) GetCredentialOAuth(ctx context.Context, vaultID, key string) (*CredentialOAuth, error) {
 	var co CredentialOAuth
-	var authURL, scopes, scopeSep, tokenAuthMethod sql.NullString
+	var managedProvider, authURL, scopes, scopeSep, tokenAuthMethod sql.NullString
 	var tokenExpiresAt, connectedAt, lastRefreshedAt, lastRefreshErrorAt interface{}
 	var lastRefreshError sql.NullString
 	var createdAt, updatedAt interface{}
 	var disablePKCERaw interface{}
 
 	err := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind(`SELECT vault_id, credential_key, authorization_url, token_url, client_id,
+		s.dialect.Rebind(`SELECT vault_id, credential_key, managed_provider, authorization_url, token_url, client_id,
 		   client_secret_ct, client_secret_nonce, scopes, scope_separator, disable_pkce,
 		   token_auth_method, refresh_token_ct, refresh_token_nonce, token_expires_at,
 		   connected_at, last_refreshed_at, last_refresh_error, last_refresh_error_at,
@@ -825,7 +834,7 @@ func (s *SQLStore) GetCredentialOAuth(ctx context.Context, vaultID, key string) 
 		 FROM credential_oauth WHERE vault_id = ? AND credential_key = ?`),
 		vaultID, key,
 	).Scan(
-		&co.VaultID, &co.CredentialKey, &authURL, &co.TokenURL, &co.ClientID,
+		&co.VaultID, &co.CredentialKey, &managedProvider, &authURL, &co.TokenURL, &co.ClientID,
 		&co.ClientSecretCT, &co.ClientSecretNonce, &scopes, &scopeSep, &disablePKCERaw,
 		&tokenAuthMethod, &co.RefreshTokenCT, &co.RefreshTokenNonce, &tokenExpiresAt,
 		&connectedAt, &lastRefreshedAt, &lastRefreshError, &lastRefreshErrorAt,
@@ -835,6 +844,9 @@ func (s *SQLStore) GetCredentialOAuth(ctx context.Context, vaultID, key string) 
 		return nil, err
 	}
 
+	if managedProvider.Valid {
+		co.ManagedProvider = &managedProvider.String
+	}
 	co.AuthorizationURL = authURL.String
 	co.Scopes = scopes.String
 	co.ScopeSeparator = scopeSep.String
@@ -893,13 +905,14 @@ func (s *SQLStore) SetCredentialOAuth(ctx context.Context, co *CredentialOAuth) 
 	lastRefreshErrorAt := s.dialect.FormatNullableTime(utcTimePtr(co.LastRefreshErrorAt))
 
 	_, err = tx.ExecContext(ctx,
-		s.dialect.Rebind(`INSERT INTO credential_oauth (vault_id, credential_key, authorization_url, token_url, client_id,
+		s.dialect.Rebind(`INSERT INTO credential_oauth (vault_id, credential_key, managed_provider, authorization_url, token_url, client_id,
 		   client_secret_ct, client_secret_nonce, scopes, scope_separator, disable_pkce, token_auth_method,
 		   refresh_token_ct, refresh_token_nonce, token_expires_at,
 		   connected_at, last_refreshed_at, last_refresh_error, last_refresh_error_at,
 		   created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(vault_id, credential_key) DO UPDATE SET
+		   managed_provider = excluded.managed_provider,
 		   authorization_url = excluded.authorization_url,
 		   token_url = excluded.token_url,
 		   client_id = excluded.client_id,
@@ -927,7 +940,7 @@ func (s *SQLStore) SetCredentialOAuth(ctx context.Context, co *CredentialOAuth) 
 		   last_refresh_error = excluded.last_refresh_error,
 		   last_refresh_error_at = excluded.last_refresh_error_at,
 		   updated_at = excluded.updated_at`),
-		co.VaultID, co.CredentialKey, nullableString(co.AuthorizationURL), co.TokenURL, co.ClientID,
+		co.VaultID, co.CredentialKey, nullableStringPointer(co.ManagedProvider), nullableString(co.AuthorizationURL), co.TokenURL, co.ClientID,
 		co.ClientSecretCT, co.ClientSecretNonce, nullableString(co.Scopes), scopeSep, disablePKCE, tokenAuthMethod,
 		co.RefreshTokenCT, co.RefreshTokenNonce, tokenExpiresAt,
 		connectedAt, lastRefreshedAt, nullableString(co.LastRefreshError), lastRefreshErrorAt,
@@ -2106,11 +2119,12 @@ func (s *SQLStore) ApplyProposal(ctx context.Context, vaultID string, proposalID
 			scopeSep = " "
 		}
 		_, err = tx.ExecContext(ctx,
-			s.dialect.Rebind(`INSERT INTO credential_oauth (vault_id, credential_key, authorization_url, token_url, client_id,
+			s.dialect.Rebind(`INSERT INTO credential_oauth (vault_id, credential_key, managed_provider, authorization_url, token_url, client_id,
 			   client_secret_ct, client_secret_nonce, scopes, scope_separator, disable_pkce, token_auth_method,
 			   created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(vault_id, credential_key) DO UPDATE SET
+			   managed_provider = excluded.managed_provider,
 			   authorization_url = excluded.authorization_url,
 			   token_url = excluded.token_url,
 			   client_id = excluded.client_id,
@@ -2133,7 +2147,7 @@ func (s *SQLStore) ApplyProposal(ctx context.Context, vaultID string, proposalID
 			   connected_at = CASE WHEN excluded.token_url = credential_oauth.token_url
 			     THEN credential_oauth.connected_at ELSE NULL END,
 			   updated_at = excluded.updated_at`),
-			vaultID, oc.Key, nullableString(oc.AuthorizationURL), oc.TokenURL, oc.ClientID,
+			vaultID, oc.Key, "", nullableString(oc.AuthorizationURL), oc.TokenURL, oc.ClientID,
 			oc.ClientSecretCT, oc.ClientSecretNonce, nullableString(oc.Scopes), scopeSep, disablePKCE, tokenAuthMethod,
 			nowStr, nowStr,
 		)

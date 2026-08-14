@@ -54,6 +54,9 @@ type TokenError struct {
 }
 
 func (e *TokenError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("oauth: token endpoint returned %d", e.StatusCode)
+	}
 	return fmt.Sprintf("oauth: token endpoint returned %d: %s", e.StatusCode, e.Body)
 }
 
@@ -177,7 +180,7 @@ func doTokenRequest(req *http.Request) (*TokenResponse, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &TokenError{
 			StatusCode: resp.StatusCode,
-			Body:       string(body),
+			Body:       safeTokenErrorCode(body),
 			Permanent:  IsPermanentError(resp.StatusCode),
 		}
 	}
@@ -190,4 +193,23 @@ func doTokenRequest(req *http.Request) (*TokenResponse, error) {
 		tok.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
 	}
 	return &tok, nil
+}
+
+// safeTokenErrorCode preserves standard machine-readable OAuth error codes
+// without retaining arbitrary provider text that may echo token material.
+func safeTokenErrorCode(body []byte) string {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	switch payload.Error {
+	case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+		"unsupported_grant_type", "invalid_scope", "access_denied",
+		"unsupported_response_type", "server_error", "temporarily_unavailable":
+		return payload.Error
+	default:
+		return ""
+	}
 }

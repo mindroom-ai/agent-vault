@@ -47,21 +47,25 @@ type mockStore struct {
 	vaultSettings      map[string]map[string]string           // per-vault: vaultID -> key -> value
 	credStores         map[string]*store.VaultCredentialStore // per-vault external credential store config
 	unmatchedHosts     map[string][]store.UnmatchedHost       // keyed by vaultID
+	oauthCredentials   map[string]*store.CredentialOAuth      // keyed by vaultID:key
+	oauthStates        map[string]*store.CredentialOAuthState // keyed by state hash
 	sessionCounter     int
 }
 
 func newMockStore() *mockStore {
 	ms := &mockStore{
-		sessions:      make(map[string]*store.Session),
-		vaults:        make(map[string]*store.Vault),
-		credentials:   make(map[string]*store.Credential),
-		brokerConfigs: make(map[string]*store.BrokerConfig),
-		users:         make(map[string]*store.User),
-		userInvites:   make(map[string]*store.UserInvite),
-		agents:        make(map[string]*store.Agent),
-		settings:      make(map[string]string),
-		vaultSettings: make(map[string]map[string]string),
-		credStores:    make(map[string]*store.VaultCredentialStore),
+		sessions:         make(map[string]*store.Session),
+		vaults:           make(map[string]*store.Vault),
+		credentials:      make(map[string]*store.Credential),
+		brokerConfigs:    make(map[string]*store.BrokerConfig),
+		users:            make(map[string]*store.User),
+		userInvites:      make(map[string]*store.UserInvite),
+		agents:           make(map[string]*store.Agent),
+		settings:         make(map[string]string),
+		vaultSettings:    make(map[string]map[string]string),
+		credStores:       make(map[string]*store.VaultCredentialStore),
+		oauthCredentials: make(map[string]*store.CredentialOAuth),
+		oauthStates:      make(map[string]*store.CredentialOAuthState),
 	}
 	// Seed root vault
 	ms.vaults["default"] = &store.Vault{ID: "root-ns-id", Name: "default"}
@@ -272,6 +276,7 @@ func (m *mockStore) DeleteCredential(_ context.Context, vaultID, key string) err
 		return fmt.Errorf("credential not found")
 	}
 	delete(m.credentials, k)
+	delete(m.oauthCredentials, k)
 	return nil
 }
 
@@ -1215,29 +1220,93 @@ func (m *mockStore) ListDynamicSecretLeases(_ context.Context) ([]store.DynamicS
 	return nil, nil
 }
 
-func (m *mockStore) GetCredentialOAuth(_ context.Context, _, _ string) (*store.CredentialOAuth, error) {
-	return nil, nil
+func (m *mockStore) GetCredentialOAuth(_ context.Context, vaultID, key string) (*store.CredentialOAuth, error) {
+	co, ok := m.oauthCredentials[vaultID+":"+key]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	clone := *co
+	return &clone, nil
 }
-func (m *mockStore) SetCredentialOAuth(_ context.Context, _ *store.CredentialOAuth) error {
+func (m *mockStore) SetCredentialOAuth(_ context.Context, co *store.CredentialOAuth) error {
+	clone := *co
+	m.oauthCredentials[co.VaultID+":"+co.CredentialKey] = &clone
+	m.credentials[co.VaultID+":"+co.CredentialKey] = &store.Credential{
+		ID:      "credential-" + co.CredentialKey,
+		VaultID: co.VaultID,
+		Key:     co.CredentialKey,
+		Type:    "oauth",
+	}
 	return nil
 }
-func (m *mockStore) UpdateCredentialOAuthTokens(_ context.Context, _, _ string, _, _, _, _ []byte, _ *time.Time) error {
+func (m *mockStore) UpdateCredentialOAuthTokens(_ context.Context, vaultID, key string, accessCT, accessNonce, refreshCT, refreshNonce []byte, expiresAt *time.Time) error {
+	mapKey := vaultID + ":" + key
+	cred, ok := m.credentials[mapKey]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	co, ok := m.oauthCredentials[mapKey]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	cred.Ciphertext = accessCT
+	cred.Nonce = accessNonce
+	if refreshCT != nil {
+		co.RefreshTokenCT = refreshCT
+		co.RefreshTokenNonce = refreshNonce
+	}
+	co.TokenExpiresAt = expiresAt
+	now := time.Now().UTC()
+	if co.ConnectedAt == nil {
+		co.ConnectedAt = &now
+	}
+	co.LastRefreshedAt = &now
+	co.LastRefreshError = ""
+	co.LastRefreshErrorAt = nil
 	return nil
 }
-func (m *mockStore) UpdateCredentialOAuthError(_ context.Context, _, _, _ string) error {
+func (m *mockStore) UpdateCredentialOAuthError(_ context.Context, vaultID, key, errMsg string) error {
+	co, ok := m.oauthCredentials[vaultID+":"+key]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	co.LastRefreshError = errMsg
+	now := time.Now().UTC()
+	co.LastRefreshErrorAt = &now
 	return nil
 }
-func (m *mockStore) CreateCredentialOAuthState(_ context.Context, _ *store.CredentialOAuthState) error {
+func (m *mockStore) CreateCredentialOAuthState(_ context.Context, state *store.CredentialOAuthState) error {
+	clone := *state
+	m.oauthStates[state.StateHash] = &clone
 	return nil
 }
-func (m *mockStore) GetCredentialOAuthStateByHash(_ context.Context, _ string) (*store.CredentialOAuthState, error) {
-	return nil, nil
+func (m *mockStore) GetCredentialOAuthStateByHash(_ context.Context, stateHash string) (*store.CredentialOAuthState, error) {
+	state, ok := m.oauthStates[stateHash]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	clone := *state
+	return &clone, nil
 }
-func (m *mockStore) DeleteCredentialOAuthState(_ context.Context, _ string) error {
+
+func (m *mockStore) DeleteCredentialOAuthState(_ context.Context, id string) error {
+	for hash, state := range m.oauthStates {
+		if state.ID == id {
+			delete(m.oauthStates, hash)
+			break
+		}
+	}
 	return nil
 }
-func (m *mockStore) ExpireCredentialOAuthStates(_ context.Context, _ time.Time) (int, error) {
-	return 0, nil
+func (m *mockStore) ExpireCredentialOAuthStates(_ context.Context, before time.Time) (int, error) {
+	expired := 0
+	for hash, state := range m.oauthStates {
+		if state.ExpiresAt.Before(before) {
+			delete(m.oauthStates, hash)
+			expired++
+		}
+	}
+	return expired, nil
 }
 
 func TestHealthEndpoint(t *testing.T) {

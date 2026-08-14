@@ -23,6 +23,8 @@ const oauthStateTTL = 10 * time.Minute
 
 const oauthSecretSentinel = "••••••••"
 
+const oauthRefreshErrorMessage = "OAuth token refresh failed"
+
 type oauthConnectRequest struct {
 	Vault            string `json:"vault"`
 	Key              string `json:"key"`
@@ -121,10 +123,12 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 	if tokenAuthMethod == "" {
 		tokenAuthMethod = "client_secret_post"
 	}
+	managedProvider := req.Provider
 
 	if err := s.store.SetCredentialOAuth(ctx, &store.CredentialOAuth{
 		VaultID:           ns.ID,
 		CredentialKey:     req.Key,
+		ManagedProvider:   &managedProvider,
 		AuthorizationURL:  req.AuthorizationURL,
 		TokenURL:          req.TokenURL,
 		ClientID:          req.ClientID,
@@ -179,12 +183,9 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	stateRaw := r.URL.Query().Get("state")
 
 	if code == "" || stateRaw == "" {
-		errMsg := r.URL.Query().Get("error_description")
-		if errMsg == "" {
-			errMsg = r.URL.Query().Get("error")
-		}
-		if errMsg == "" {
-			errMsg = "Missing code or state parameter"
+		errMsg := "Missing code or state parameter"
+		if r.URL.Query().Has("error") || r.URL.Query().Has("error_description") {
+			errMsg = "OAuth authorization failed"
 		}
 		s.redirectOAuthComplete(w, r, "", "", "error", errMsg)
 		return
@@ -312,7 +313,8 @@ func (s *Server) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {
 		resp.ConnectedAt = &t
 	}
 	if oauthCfg.LastRefreshError != "" {
-		resp.LastError = &oauthCfg.LastRefreshError
+		lastError := oauthRefreshErrorMessage
+		resp.LastError = &lastError
 	}
 
 	jsonOK(w, resp)
@@ -430,7 +432,11 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		}
 
 		var clientSecretCT, clientSecretNonce []byte
-		_, managedProvider := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(existing)
+		_, managedProvider, resolveErr := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(existing)
+		if resolveErr != nil {
+			jsonError(w, http.StatusBadRequest, "Stored managed OAuth configuration is invalid")
+			return
+		}
 		if clientSecret != "" && !managedProvider {
 			clientSecretCT, clientSecretNonce, err = crypto.Encrypt([]byte(clientSecret), s.encKey)
 			if err != nil {
@@ -439,6 +445,7 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 
+		genericProvider := ""
 		if tokenURL == "" {
 			tokenURL = "manual"
 		}
@@ -448,6 +455,7 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 		oauthRow := &store.CredentialOAuth{
 			VaultID:           ns.ID,
 			CredentialKey:     req.Key,
+			ManagedProvider:   &genericProvider,
 			TokenURL:          tokenURL,
 			ClientID:          clientID,
 			ClientSecretCT:    clientSecretCT,
@@ -455,6 +463,7 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 			TokenAuthMethod:   tokenAuthMethod,
 		}
 		if existing != nil {
+			oauthRow.ManagedProvider = existing.ManagedProvider
 			oauthRow.AuthorizationURL = existing.AuthorizationURL
 			oauthRow.Scopes = existing.Scopes
 			oauthRow.ScopeSeparator = existing.ScopeSeparator
@@ -513,6 +522,7 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 
 	// Create credential_oauth row if needed.
 	if existing == nil {
+		genericProvider := ""
 		if tokenURL == "" {
 			tokenURL = "manual"
 		}
@@ -520,10 +530,11 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 			clientID = "manual"
 		}
 		_ = s.store.SetCredentialOAuth(ctx, &store.CredentialOAuth{
-			VaultID:       ns.ID,
-			CredentialKey: req.Key,
-			TokenURL:      tokenURL,
-			ClientID:      clientID,
+			VaultID:         ns.ID,
+			CredentialKey:   req.Key,
+			ManagedProvider: &genericProvider,
+			TokenURL:        tokenURL,
+			ClientID:        clientID,
 		})
 	}
 

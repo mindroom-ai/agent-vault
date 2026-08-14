@@ -103,8 +103,10 @@ required — there is no project-file or interactive-picker fallback.`,
 
 var credentialGetCmd = &cobra.Command{
 	Use:   "get <key>",
-	Short: "Get the decrypted value of a credential",
-	Long: `Get the decrypted value of a credential.
+	Short: "Get the decrypted value of a static or dynamic credential",
+	Long: `Get the decrypted value of a static or dynamic credential.
+
+OAuth credentials are broker-only and cannot be revealed.
 
 In agent mode (AGENT_VAULT_TOKEN set), AGENT_VAULT_VAULT (or --vault) is
 required — there is no project-file or interactive-picker fallback.`,
@@ -251,7 +253,7 @@ required — there is no project-file or interactive-picker fallback.`,
 }
 
 func init() {
-	credentialListCmd.Flags().Bool("reveal", false, "Show decrypted credential values (requires member+ role)")
+	credentialListCmd.Flags().Bool("reveal", false, "Show decrypted static and dynamic credential values; OAuth stays broker-only (requires member+ role)")
 	credentialCmd.AddCommand(credentialListCmd)
 	credentialCmd.AddCommand(credentialGetCmd)
 	credentialCmd.AddCommand(credentialSetCmd)

@@ -106,14 +106,18 @@ docker run -it -p 14321:14321 -p 14322:14322 \
 
 ### Managed OAuth applications
 
-Instance operators can configure one Google OAuth Web application for every vault:
+Instance operators can configure shared Google OAuth and GitHub App clients for every vault:
 
 ```bash
 export AGENT_VAULT_OAUTH_GOOGLE_CLIENT_ID=your-client-id
 export AGENT_VAULT_OAUTH_GOOGLE_CLIENT_SECRET=your-client-secret
+export AGENT_VAULT_OAUTH_GITHUB_CLIENT_ID=your-github-app-client-id
+export AGENT_VAULT_OAUTH_GITHUB_CLIENT_SECRET=your-github-app-client-secret
 ```
 
-Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` as an authorized redirect URI. Vault users can then choose **Google (managed)** and authorize separate Google accounts without creating or entering OAuth client credentials. Access and refresh tokens stay isolated per vault, while the shared client secret remains operator-managed and is resolved at runtime so secret rotation does not require reconnecting every vault.
+Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` with each provider. Vault users can then choose **Google (managed)** or **GitHub (managed)** and authorize separate accounts without creating or entering OAuth client credentials. Google users select OAuth scopes. GitHub App user authorization sends no classic OAuth scopes; effective access is the intersection of the app installation, the app's configured permissions, and the user's own access.
+
+Access and refresh tokens stay encrypted and isolated per vault, while shared client secrets remain operator-managed and are resolved at runtime. The GitHub user access token is injected as a bearer token for `api.github.com`. If an existing Git smart-HTTP service references the same credential key (the UI defaults to `GITHUB_TOKEN`), it uses that user token in place of the previous PAT without a new transport. Agent Vault configuration alone does not change downstream tools or deployments.
 
 The server starts the HTTP API on port `14321` and a transparent HTTP/HTTPS proxy on port `14322`; the same listener handles `CONNECT` for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams.
 

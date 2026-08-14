@@ -1,12 +1,15 @@
 package server
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/oauth"
 	"github.com/Infisical/agent-vault/internal/store"
 )
+
+func stringPointer(value string) *string { return &value }
 
 func testManagedGoogleProvider() oauth.ManagedProvider {
 	return oauth.ManagedProvider{
@@ -17,6 +20,19 @@ func testManagedGoogleProvider() oauth.ManagedProvider {
 		ClientSecret:     "managed-client-secret",
 		TokenAuthMethod:  "client_secret_post",
 		RequireScopes:    true,
+	}
+}
+
+func testManagedGitHubProvider() oauth.ManagedProvider {
+	return oauth.ManagedProvider{
+		ID:               "github",
+		AuthorizationURL: "https://github.com/login/oauth/authorize",
+		TokenURL:         "https://github.com/login/oauth/access_token",
+		ClientID:         "managed-github-client-id",
+		ClientSecret:     "managed-github-client-secret",
+		TokenAuthMethod:  "client_secret_post",
+		RequireScopes:    false,
+		OmitScopes:       true,
 	}
 }
 
@@ -32,6 +48,7 @@ func TestApplyManagedOAuthProvider(t *testing.T) {
 		ClientSecret:     "attacker-client-secret",
 		TokenAuthMethod:  "client_secret_basic",
 		Scopes:           "openid email",
+		DisablePKCE:      true,
 	}
 	if err := srv.applyManagedOAuthProvider(&req); err != nil {
 		t.Fatalf("applyManagedOAuthProvider: %v", err)
@@ -52,6 +69,60 @@ func TestApplyManagedOAuthProvider(t *testing.T) {
 	}
 	if req.TokenAuthMethod != provider.TokenAuthMethod {
 		t.Errorf("TokenAuthMethod = %q, want %q", req.TokenAuthMethod, provider.TokenAuthMethod)
+	}
+	if req.DisablePKCE {
+		t.Error("DisablePKCE = true, want managed provider policy to require PKCE")
+	}
+}
+
+func TestApplyManagedGitHubOAuthProviderDropsCallerScopes(t *testing.T) {
+	srv := newTestServer()
+	provider := testManagedGitHubProvider()
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+	req := oauthConnectRequest{
+		Provider:         "github",
+		AuthorizationURL: "https://attacker.example/authorize",
+		TokenURL:         "https://attacker.example/token",
+		ClientID:         "attacker-client-id",
+		ClientSecret:     "attacker-client-secret",
+		TokenAuthMethod:  "client_secret_basic",
+		Scopes:           "repo workflow",
+		DisablePKCE:      true,
+	}
+	if err := srv.applyManagedOAuthProvider(&req); err != nil {
+		t.Fatalf("applyManagedOAuthProvider: %v", err)
+	}
+
+	if req.AuthorizationURL != provider.AuthorizationURL || req.TokenURL != provider.TokenURL {
+		t.Fatalf("managed endpoints were not authoritative: authorization=%q token=%q", req.AuthorizationURL, req.TokenURL)
+	}
+	if req.ClientID != provider.ClientID || req.ClientSecret != "" || req.TokenAuthMethod != "client_secret_post" {
+		t.Fatalf("managed client configuration was not authoritative: %+v", req)
+	}
+	if req.Scopes != "" {
+		t.Fatalf("Scopes = %q, want empty for GitHub App user authorization", req.Scopes)
+	}
+	if req.DisablePKCE {
+		t.Error("DisablePKCE = true, want managed GitHub to require PKCE")
+	}
+
+	authorizationURL := oauth.BuildAuthorizationURL(
+		req.AuthorizationURL,
+		req.ClientID,
+		"https://vault.example/v1/oauth/callback",
+		"state",
+		"challenge",
+		req.Scopes,
+		" ",
+		req.DisablePKCE,
+	)
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatalf("parse authorization URL: %v", err)
+	}
+	if _, ok := parsed.Query()["scope"]; ok {
+		t.Fatalf("authorization URL contains classic OAuth scope: %s", authorizationURL)
 	}
 }
 
@@ -85,11 +156,22 @@ func TestManagedOAuthProviderForConfig(t *testing.T) {
 	provider := testManagedGoogleProvider()
 	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
 
-	if got := srv.managedOAuthProviderForConfig(provider.AuthorizationURL, provider.TokenURL, provider.ClientID); got != "google" {
-		t.Errorf("managedOAuthProviderForConfig = %q, want google", got)
+	config := &store.CredentialOAuth{
+		AuthorizationURL: provider.AuthorizationURL,
+		TokenURL:         provider.TokenURL,
+		ClientID:         provider.ClientID,
+		Scopes:           "openid email",
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  provider.TokenAuthMethod,
 	}
-	if got := srv.managedOAuthProviderForConfig(provider.AuthorizationURL, "https://attacker.example/token", provider.ClientID); got != "" {
-		t.Errorf("managedOAuthProviderForConfig = %q for mismatched token URL, want empty", got)
+	got, managed, err := srv.managedOAuthProviderForConfig(config)
+	if err != nil || !managed || got.ID != "google" {
+		t.Fatalf("managedOAuthProviderForConfig = (%q, %v, %v), want google managed", got.ID, managed, err)
+	}
+	config.TokenURL = "https://attacker.example/token"
+	got, managed, err = srv.managedOAuthProviderForConfig(config)
+	if err != nil || managed || got.ID != "" {
+		t.Fatalf("managedOAuthProviderForConfig mismatch = (%q, %v, %v), want unmanaged", got.ID, managed, err)
 	}
 }
 
@@ -111,16 +193,14 @@ func TestOAuthClientSecretUsesCurrentManagedValue(t *testing.T) {
 	provider := testManagedGoogleProvider()
 	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
 
-	oldSecretCT, oldSecretNonce, err := crypto.Encrypt([]byte("old-managed-secret"), srv.encKey)
-	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
-	}
 	config := &store.CredentialOAuth{
-		AuthorizationURL:  provider.AuthorizationURL,
-		TokenURL:          provider.TokenURL,
-		ClientID:          provider.ClientID,
-		ClientSecretCT:    oldSecretCT,
-		ClientSecretNonce: oldSecretNonce,
+		ManagedProvider:  stringPointer("google"),
+		AuthorizationURL: provider.AuthorizationURL,
+		TokenURL:         provider.TokenURL,
+		ClientID:         provider.ClientID,
+		Scopes:           "openid email",
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  provider.TokenAuthMethod,
 	}
 
 	got, err := srv.oauthClientSecret(config)
@@ -129,6 +209,67 @@ func TestOAuthClientSecretUsesCurrentManagedValue(t *testing.T) {
 	}
 	if got != provider.ClientSecret {
 		t.Fatalf("oauthClientSecret = %q, want current managed secret", got)
+	}
+}
+
+func TestOAuthClientSecretRejectsExplicitGenericTupleSpoof(t *testing.T) {
+	srv := newTestServer()
+	provider := testManagedGitHubProvider()
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+	got, err := srv.oauthClientSecret(&store.CredentialOAuth{
+		ManagedProvider:  stringPointer(""),
+		AuthorizationURL: provider.AuthorizationURL,
+		TokenURL:         provider.TokenURL,
+		ClientID:         provider.ClientID,
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  provider.TokenAuthMethod,
+	})
+	if err != nil {
+		t.Fatalf("oauthClientSecret: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("tuple spoof resolved operator secret")
+	}
+}
+
+func TestOAuthClientSecretRejectsManagedPolicyMismatch(t *testing.T) {
+	srv := newTestServer()
+	provider := testManagedGitHubProvider()
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+	_, err := srv.oauthClientSecret(&store.CredentialOAuth{
+		ManagedProvider:  stringPointer("github"),
+		AuthorizationURL: provider.AuthorizationURL,
+		TokenURL:         provider.TokenURL,
+		ClientID:         provider.ClientID,
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  provider.TokenAuthMethod,
+		DisablePKCE:      true,
+	})
+	if err == nil {
+		t.Fatal("oauthClientSecret accepted managed config with PKCE disabled")
+	}
+}
+
+func TestOAuthClientSecretSupportsLegacyExactManagedConfig(t *testing.T) {
+	srv := newTestServer()
+	provider := testManagedGoogleProvider()
+	srv.SetManagedOAuthProviders([]oauth.ManagedProvider{provider})
+
+	got, err := srv.oauthClientSecret(&store.CredentialOAuth{
+		AuthorizationURL: provider.AuthorizationURL,
+		TokenURL:         provider.TokenURL,
+		ClientID:         provider.ClientID,
+		Scopes:           "openid email",
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  provider.TokenAuthMethod,
+	})
+	if err != nil {
+		t.Fatalf("oauthClientSecret: %v", err)
+	}
+	if got != provider.ClientSecret {
+		t.Fatalf("oauthClientSecret = %q, want legacy managed secret", got)
 	}
 }
 

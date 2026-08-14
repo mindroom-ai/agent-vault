@@ -33,14 +33,18 @@ description: "Configuration for deploying an instance of Agent Vault."
 
 ## Managed OAuth providers
 
-An instance operator can configure a shared Google OAuth application. Vault users then choose **Google (managed)**, select scopes, and authorize their own Google account without creating or entering OAuth client credentials. Access and refresh tokens remain separate per vault. The shared client secret is resolved from the current server configuration during authorization and refresh, so rotating it only requires restarting the server with the new value.
+An instance operator can configure shared Google OAuth and GitHub App clients. Vault users then choose a managed provider and authorize their own account without creating or entering OAuth client credentials. Google users select scopes. GitHub App user authorization sends no classic OAuth scopes; effective access is limited by the app installation, the app's configured permissions, and the user's own access. Access and refresh tokens remain encrypted and separate per vault. Shared client secrets are resolved from current server configuration during authorization and refresh.
 
-Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` as an authorized redirect URI on the Google OAuth Web application. Both variables are required to enable the managed provider.
+Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` as an authorized callback for each configured provider. Both variables in a provider pair are required; partial configuration prevents startup.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `AGENT_VAULT_OAUTH_GOOGLE_CLIENT_ID` | Conditional | Client ID for the instance-managed Google OAuth Web application. |
 | `AGENT_VAULT_OAUTH_GOOGLE_CLIENT_SECRET` | Conditional | Client secret for the instance-managed Google OAuth Web application. Source it from the deployment platform's secret store. |
+| `AGENT_VAULT_OAUTH_GITHUB_CLIENT_ID` | Conditional | Client ID for the instance-managed GitHub App user authorization flow. |
+| `AGENT_VAULT_OAUTH_GITHUB_CLIENT_SECRET` | Conditional | Client secret for the instance-managed GitHub App. Source it from the deployment platform's secret store. |
+
+GitHub API services use the per-user access token as a bearer credential. Existing Git smart-HTTP services can use the same credential as their HTTP password, so choosing the default `GITHUB_TOKEN` key replaces a PAT without adding a second transport. No GitHub App private key or installation-token minting is involved. This server configuration does not modify downstream tool or deployment configuration.
 
 ## Email SMTP configuration
 

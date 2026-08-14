@@ -13,7 +13,12 @@ import Combobox from "../../components/Combobox";
 import CreatableSelect from "../../components/CreatableSelect";
 import { Link } from "@tanstack/react-router";
 import { apiFetch, apiRequest } from "../../lib/api";
-import { OAUTH_PROVIDERS } from "../../lib/oauthProviders";
+import { managedOAuthPolicy, OAUTH_PROVIDERS } from "../../lib/oauthProviders";
+
+export function canRevealCredential(credential: { type?: string; managed_provider?: string; connected_at?: string; unavailable?: boolean }) {
+  return !credential.unavailable &&
+    credential.type !== "oauth";
+}
 
 export default function CredentialsTab() {
   const router = useRouter();
@@ -299,7 +304,7 @@ export default function CredentialsTab() {
                     ••••••••
                   </span>
                 )}
-                {!cred.unavailable && (cred.type !== "oauth" || cred.connected_at) && (
+                {canRevealCredential(cred) && (
                   <button
                     onClick={() => toggleReveal(cred.key)}
                     disabled={revealing[cred.key]}
@@ -550,10 +555,11 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
   const isTokenUpload = oauthMode === "upload";
   const currentProvider = OAUTH_PROVIDERS.find((p) => p.authorizationUrl === oauthAuthUrl || p.tokenUrl === oauthTokenUrl);
   const isManagedProvider = !!oauthProviderId && managedOAuthProviders.includes(oauthProviderId);
+  const managedPolicy = currentProvider ? managedOAuthPolicy(currentProvider) : { requiresScopes: true, suggestedKey: oauthKey, connectLabel: "Connect" };
   const scopeOptions = (currentProvider?.scopes ?? []).map((s) => ({ value: s.value, description: s.description }));
   const scopeBundles = currentProvider?.scopeBundles ?? [];
   const canSubmitStatic = entries.every((e) => e.key.trim() && e.value.trim());
-  const canSubmitOAuthConnect = !!(oauthKey.trim() && oauthTokenUrl.trim() && (isManagedProvider || oauthClientId.trim()) && oauthAuthUrl.trim() && (!isManagedProvider || oauthScopes.length > 0));
+  const canSubmitOAuthConnect = !!(oauthKey.trim() && oauthTokenUrl.trim() && (isManagedProvider || oauthClientId.trim()) && oauthAuthUrl.trim() && (!isManagedProvider || !managedPolicy.requiresScopes || oauthScopes.length > 0));
   const canSubmitOAuthTokens = !!(oauthKey.trim() && (oauthAccessToken.trim() || oauthRefreshToken.trim()));
   const canSubmit = credType === "static" ? canSubmitStatic : isTokenUpload ? canSubmitOAuthTokens : oauthConnected;
 
@@ -599,12 +605,12 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
       setOauthClientId("");
       setOauthClientSecret("");
     }
-    if (!isEdit) setOauthKey(p.suggestedKey);
+    if (!isEdit) setOauthKey(managedOAuthProviders.includes(p.id) ? managedOAuthPolicy(p).suggestedKey : p.suggestedKey);
     setOauthScopes([]);
   }
 
   async function handleOAuthConnect() {
-    if (isManagedProvider && oauthScopes.length === 0) {
+    if (isManagedProvider && managedPolicy.requiresScopes && oauthScopes.length === 0) {
       setError("Choose at least one OAuth scope before connecting.");
       return;
     }
@@ -658,7 +664,7 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         {credType === "oauth" && !isTokenUpload && !oauthConnected ? (
           <Button onClick={handleOAuthConnect} disabled={!canSubmitOAuthConnect} loading={oauthConnecting}>
-            {oauthConnecting ? "Waiting for authorization..." : "Connect"}
+            {oauthConnecting ? "Waiting for authorization..." : isManagedProvider ? managedPolicy.connectLabel : "Connect"}
           </Button>
         ) : (
           <Button onClick={handleSubmit} disabled={!canSubmit} loading={saving}>
@@ -729,7 +735,7 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
               </FormField>
               <FormField label="Token URL"><Input placeholder="e.g. https://oauth2.googleapis.com/token" value={oauthTokenUrl} onChange={(e) => setOauthTokenUrl(e.target.value)} /></FormField>
               {isManagedProvider ? (
-                <InfoBanner>OAuth application managed by this Agent Vault instance. Choose scopes, then connect your account.</InfoBanner>
+                <InfoBanner>OAuth application managed by this Agent Vault instance. {managedPolicy.requiresScopes ? "Choose scopes, then connect your account." : "Connect your account without entering client credentials or scopes."}</InfoBanner>
               ) : (
                 <div className="flex gap-3">
                   <div className="flex-1"><FormField label="Client ID"><Input placeholder="OAuth app client ID" value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} /></FormField></div>
@@ -743,15 +749,17 @@ function CredentialModal({ vaultName, managedOAuthProviders, editingKey, editing
                   </FormField></div>
                 </div>
               )}
-              <FormField label="Scopes" helperText={isManagedProvider ? "Required. Choose at least one scope before connecting." : undefined}>
-                <CreatableSelect
-                  values={oauthScopes}
-                  onChange={setOauthScopes}
-                  options={scopeOptions}
-                  bulkOptions={scopeBundles}
-                  placeholder="Add scopes"
-                />
-              </FormField>
+              {(!isManagedProvider || managedPolicy.requiresScopes) && (
+                <FormField label="Scopes" helperText={isManagedProvider ? "Required. Choose at least one scope before connecting." : undefined}>
+                  <CreatableSelect
+                    values={oauthScopes}
+                    onChange={setOauthScopes}
+                    options={scopeOptions}
+                    bulkOptions={scopeBundles}
+                    placeholder="Add scopes"
+                  />
+                </FormField>
+              )}
             </>
           ) : (
             <>

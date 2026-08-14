@@ -62,6 +62,47 @@ func TestMigrationIdempotency(t *testing.T) {
 	_ = s2.Close()
 }
 
+func TestCredentialOAuthManagedProviderProvenanceRoundTrip(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	vault, err := s.GetVault(ctx, DefaultVault)
+	if err != nil {
+		t.Fatalf("GetVault: %v", err)
+	}
+
+	managedProvider := "github"
+	if err := s.SetCredentialOAuth(ctx, &CredentialOAuth{
+		VaultID:          vault.ID,
+		CredentialKey:    "GITHUB_TOKEN",
+		ManagedProvider:  &managedProvider,
+		AuthorizationURL: "https://github.com/login/oauth/authorize",
+		TokenURL:         "https://github.com/login/oauth/access_token",
+		ClientID:         "github-client-id",
+	}); err != nil {
+		t.Fatalf("SetCredentialOAuth managed: %v", err)
+	}
+	got, err := s.GetCredentialOAuth(ctx, vault.ID, "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredentialOAuth managed: %v", err)
+	}
+	if got.ManagedProvider == nil || *got.ManagedProvider != "github" {
+		t.Fatalf("ManagedProvider = %v, want github", got.ManagedProvider)
+	}
+
+	explicitGeneric := ""
+	got.ManagedProvider = &explicitGeneric
+	if err := s.SetCredentialOAuth(ctx, got); err != nil {
+		t.Fatalf("SetCredentialOAuth generic: %v", err)
+	}
+	got, err = s.GetCredentialOAuth(ctx, vault.ID, "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredentialOAuth generic: %v", err)
+	}
+	if got.ManagedProvider == nil || *got.ManagedProvider != "" {
+		t.Fatalf("ManagedProvider = %v, want explicit generic marker", got.ManagedProvider)
+	}
+}
+
 // --- Vault CRUD ---
 
 func TestVaultCRUD(t *testing.T) {
