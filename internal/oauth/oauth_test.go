@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -277,6 +278,77 @@ func TestRefresh_PermanentError(t *testing.T) {
 	}
 }
 
+func TestRefresh_TokenErrorDoesNotExposeResponseSecrets(t *testing.T) {
+	const (
+		accessToken  = "ghu_access-token-material"
+		refreshToken = "ghr_refresh-token-material"
+		clientSecret = "operator-client-secret"
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"rejected ` + refreshToken + `","access_token":"` + accessToken + `","client_secret":"` + clientSecret + `"}`))
+	}))
+	defer ts.Close()
+
+	_, err := Refresh(context.Background(), RefreshConfig{
+		TokenURL:     ts.URL,
+		ClientID:     "github-client-id",
+		ClientSecret: clientSecret,
+		RefreshToken: refreshToken,
+	})
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+	te, ok := err.(*TokenError)
+	if !ok {
+		t.Fatalf("expected *TokenError, got %T", err)
+	}
+	for _, output := range []string{err.Error(), te.Body} {
+		for _, secret := range []string{accessToken, refreshToken, clientSecret} {
+			if strings.Contains(output, secret) {
+				t.Fatalf("token error exposed secret %q in %q", secret, output)
+			}
+		}
+	}
+	if !strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("token error lost safe provider code: %q", err.Error())
+	}
+}
+
+func TestSafeTokenErrorCodeRejectsArbitraryProviderValues(t *testing.T) {
+	for _, body := range []string{
+		`{"error":"ghu_access-token-material"}`,
+		`{"error":"ghr_refresh-token-material"}`,
+		`{"error":"operator-client-secret"}`,
+		`{"error":"unknown_provider_detail"}`,
+		`{"error_description":"missing error key"}`,
+		`upstream returned ghu_access-token-material`,
+	} {
+		if got := safeTokenErrorCode([]byte(body)); got != "" {
+			t.Errorf("safeTokenErrorCode(%s) = %q, want empty", body, got)
+		}
+	}
+	if got := safeTokenErrorCode([]byte(`{"error":"invalid_grant"}`)); got != "invalid_grant" {
+		t.Fatalf("safeTokenErrorCode(valid code) = %q, want invalid_grant", got)
+	}
+}
+
+func TestSafeTokenErrorCodePreservesGitHubCodes(t *testing.T) {
+	for _, code := range []string{
+		"bad_refresh_token",
+		"bad_verification_code",
+		"incorrect_client_credentials",
+		"redirect_uri_mismatch",
+		"unverified_user_email",
+	} {
+		body := []byte(`{"error":"` + code + `","error_description":"provider detail"}`)
+		if got := safeTokenErrorCode(body); got != code {
+			t.Errorf("safeTokenErrorCode(%q) = %q, want %q", body, got, code)
+		}
+	}
+}
+
 func TestRefresh_TransientError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
@@ -341,9 +413,9 @@ func TestIsPermanentError(t *testing.T) {
 		{401, true},
 		{403, true},
 		{404, true},
-		{408, false},  // Request Timeout — transient
+		{408, false}, // Request Timeout — transient
 		{422, true},
-		{429, false},  // Too Many Requests — transient
+		{429, false}, // Too Many Requests — transient
 		{500, false},
 		{502, false},
 		{503, false},

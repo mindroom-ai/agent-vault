@@ -58,7 +58,9 @@ const vite = await createServer({
   optimizeDeps: { noDiscovery: true },
 });
 const { default: CreatableSelect } = await vite.ssrLoadModule("/src/components/CreatableSelect.tsx");
-const { OAUTH_PROVIDERS } = await vite.ssrLoadModule("/src/lib/oauthProviders.ts");
+const oauthProviderModule = await vite.ssrLoadModule("/src/lib/oauthProviders.ts");
+const { OAUTH_PROVIDERS } = oauthProviderModule;
+const credentialsTabModule = await vite.ssrLoadModule("/src/pages/vault/CredentialsTab.tsx");
 
 after(() => vite.close());
 let mountedRoot;
@@ -187,6 +189,30 @@ test("Google exposes complete all-scope and read-only bundles", () => {
       .map((scope) => scope.value)
       .filter((value) => ["openid", "email", "profile"].includes(value) || value.endsWith(".readonly")),
   );
+});
+
+test("managed GitHub connects without classic scopes using existing proxy credential key", () => {
+  assert.equal(typeof oauthProviderModule.managedOAuthPolicy, "function");
+  const github = OAUTH_PROVIDERS.find((provider) => provider.id === "github");
+  const google = OAUTH_PROVIDERS.find((provider) => provider.id === "google");
+
+  assert.deepEqual(oauthProviderModule.managedOAuthPolicy(github), {
+    requiresScopes: false,
+    suggestedKey: "GITHUB_TOKEN",
+    connectLabel: "Connect with GitHub",
+  });
+  assert.deepEqual(oauthProviderModule.managedOAuthPolicy(google), {
+    requiresScopes: true,
+    suggestedKey: "GOOGLE",
+    connectLabel: "Connect with Google",
+  });
+});
+
+test("managed GitHub OAuth credentials stay broker-only in credential UI", () => {
+  assert.equal(typeof credentialsTabModule.canRevealCredential, "function");
+  assert.equal(credentialsTabModule.canRevealCredential({ type: "oauth", managed_provider: "github", connected_at: "2026-08-13T00:00:00Z" }), false);
+  assert.equal(credentialsTabModule.canRevealCredential({ type: "oauth", managed_provider: "google", connected_at: "2026-08-13T00:00:00Z" }), false);
+  assert.equal(credentialsTabModule.canRevealCredential({ type: "static" }), true);
 });
 
 test("bulk options add missing scopes, preserve custom scopes, and keep the dropdown open", async () => {

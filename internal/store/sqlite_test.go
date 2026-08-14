@@ -62,6 +62,47 @@ func TestMigrationIdempotency(t *testing.T) {
 	_ = s2.Close()
 }
 
+func TestCredentialOAuthManagedProviderProvenanceRoundTrip(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	vault, err := s.GetVault(ctx, DefaultVault)
+	if err != nil {
+		t.Fatalf("GetVault: %v", err)
+	}
+
+	managedProvider := "github"
+	if err := s.SetCredentialOAuth(ctx, &CredentialOAuth{
+		VaultID:          vault.ID,
+		CredentialKey:    "GITHUB_TOKEN",
+		ManagedProvider:  &managedProvider,
+		AuthorizationURL: "https://github.com/login/oauth/authorize",
+		TokenURL:         "https://github.com/login/oauth/access_token",
+		ClientID:         "github-client-id",
+	}); err != nil {
+		t.Fatalf("SetCredentialOAuth managed: %v", err)
+	}
+	got, err := s.GetCredentialOAuth(ctx, vault.ID, "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredentialOAuth managed: %v", err)
+	}
+	if got.ManagedProvider == nil || *got.ManagedProvider != "github" {
+		t.Fatalf("ManagedProvider = %v, want github", got.ManagedProvider)
+	}
+
+	explicitGeneric := ""
+	got.ManagedProvider = &explicitGeneric
+	if err := s.SetCredentialOAuth(ctx, got); err != nil {
+		t.Fatalf("SetCredentialOAuth generic: %v", err)
+	}
+	got, err = s.GetCredentialOAuth(ctx, vault.ID, "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredentialOAuth generic: %v", err)
+	}
+	if got.ManagedProvider == nil || *got.ManagedProvider != "" {
+		t.Fatalf("ManagedProvider = %v, want explicit generic marker", got.ManagedProvider)
+	}
+}
+
 // --- Vault CRUD ---
 
 func TestVaultCRUD(t *testing.T) {
@@ -1429,6 +1470,109 @@ func TestApplyProposal(t *testing.T) {
 	}
 	if string(cred.Ciphertext) != "real-enc" {
 		t.Fatalf("expected ciphertext 'real-enc', got %q", cred.Ciphertext)
+	}
+}
+
+func TestApplyProposalRejectsManagedOAuthCredentialReplacement(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+
+	vault, err := s.CreateVault(ctx, "managed-oauth-proposal")
+	if err != nil {
+		t.Fatalf("CreateVault: %v", err)
+	}
+	managedProvider := "github"
+	if err := s.SetCredentialOAuth(ctx, &CredentialOAuth{
+		VaultID:          vault.ID,
+		CredentialKey:    "GITHUB_TOKEN",
+		ManagedProvider:  &managedProvider,
+		AuthorizationURL: "https://github.com/login/oauth/authorize",
+		TokenURL:         "https://github.com/login/oauth/access_token",
+		ClientID:         "managed-client-id",
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  "client_secret_post",
+	}); err != nil {
+		t.Fatalf("SetCredentialOAuth: %v", err)
+	}
+	proposalRow, err := s.CreateProposal(ctx, vault.ID, "session-id", "[]", "[]", "replace oauth", "", nil)
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	err = s.ApplyProposal(ctx, vault.ID, proposalRow.ID, "[]", nil, nil, []OAuthCredentialConfig{{
+		Key:              "GITHUB_TOKEN",
+		AuthorizationURL: "https://attacker.example/authorize",
+		TokenURL:         "https://attacker.example/token",
+		ClientID:         "attacker-client-id",
+	}})
+	if err == nil {
+		t.Fatal("ApplyProposal replaced a managed OAuth credential")
+	}
+
+	config, err := s.GetCredentialOAuth(ctx, vault.ID, "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredentialOAuth: %v", err)
+	}
+	if config.ManagedProvider == nil || *config.ManagedProvider != managedProvider ||
+		config.AuthorizationURL != "https://github.com/login/oauth/authorize" ||
+		config.TokenURL != "https://github.com/login/oauth/access_token" ||
+		config.ClientID != "managed-client-id" {
+		t.Fatalf("managed OAuth config changed after rejected proposal: %+v", config)
+	}
+	proposalRow, err = s.GetProposal(ctx, vault.ID, proposalRow.ID)
+	if err != nil {
+		t.Fatalf("GetProposal: %v", err)
+	}
+	if proposalRow.Status != "pending" {
+		t.Fatalf("proposal status = %q, want pending", proposalRow.Status)
+	}
+}
+
+func TestApplyProposalRejectsStaticReplacementOfOAuthCredential(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+
+	vault, err := s.CreateVault(ctx, "static-over-oauth-proposal")
+	if err != nil {
+		t.Fatalf("CreateVault: %v", err)
+	}
+	managedProvider := "github"
+	if err := s.SetCredentialOAuth(ctx, &CredentialOAuth{
+		VaultID:          vault.ID,
+		CredentialKey:    "GITHUB_TOKEN",
+		ManagedProvider:  &managedProvider,
+		AuthorizationURL: "https://github.com/login/oauth/authorize",
+		TokenURL:         "https://github.com/login/oauth/access_token",
+		ClientID:         "managed-client-id",
+		ScopeSeparator:   " ",
+		TokenAuthMethod:  "client_secret_post",
+	}); err != nil {
+		t.Fatalf("SetCredentialOAuth: %v", err)
+	}
+	originalCiphertext := []byte("managed-access-ciphertext")
+	originalNonce := []byte("managed-access-nonce")
+	if err := s.UpdateCredentialOAuthTokens(ctx, vault.ID, "GITHUB_TOKEN", originalCiphertext, originalNonce, nil, nil, nil); err != nil {
+		t.Fatalf("UpdateCredentialOAuthTokens: %v", err)
+	}
+	proposalRow, err := s.CreateProposal(ctx, vault.ID, "session-id", "[]", "[]", "replace oauth with static", "", nil)
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	err = s.ApplyProposal(ctx, vault.ID, proposalRow.ID, "[]", map[string]EncryptedCredential{
+		"GITHUB_TOKEN": {Ciphertext: []byte("replacement"), Nonce: []byte("replacement-nonce")},
+	}, nil, nil)
+	if err == nil {
+		t.Fatal("ApplyProposal replaced an OAuth credential with a static value")
+	}
+
+	credential, err := s.GetCredential(ctx, vault.ID, "GITHUB_TOKEN")
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
+	}
+	if credential.Type != "oauth" || string(credential.Ciphertext) != string(originalCiphertext) ||
+		string(credential.Nonce) != string(originalNonce) {
+		t.Fatalf("OAuth credential changed after rejected static replacement: %+v", credential)
 	}
 }
 

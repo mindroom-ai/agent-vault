@@ -149,16 +149,16 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		entry := credentialEntry{Key: cred.Key, Type: cred.Type}
-		if cred.Type == "oauth" && len(cred.Ciphertext) == 0 {
-			entry.Value = ""
-		} else {
-			plaintext, err := crypto.Decrypt(cred.Ciphertext, cred.Nonce, s.encKey)
-			if err != nil {
-				jsonError(w, http.StatusInternalServerError, "Failed to decrypt credential")
-				return
-			}
-			entry.Value = string(plaintext)
+		if cred.Type == "oauth" {
+			jsonError(w, http.StatusForbidden, "OAuth credentials are broker-only and cannot be revealed")
+			return
 		}
+		plaintext, err := crypto.Decrypt(cred.Ciphertext, cred.Nonce, s.encKey)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "Failed to decrypt credential")
+			return
+		}
+		entry.Value = string(plaintext)
 		if cred.Type == "oauth" {
 			s.enrichOAuthEntry(ctx, ns.ID, &entry)
 		}
@@ -182,17 +182,13 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 		keys[i] = cred.Key
 		entries[i] = credentialEntry{Key: cred.Key, Type: cred.Type}
 
-		if reveal {
-			if cred.Type == "oauth" && len(cred.Ciphertext) == 0 {
-				entries[i].Value = ""
-			} else {
-				plaintext, err := crypto.Decrypt(cred.Ciphertext, cred.Nonce, s.encKey)
-				if err != nil {
-					jsonError(w, http.StatusInternalServerError, "Failed to decrypt credential")
-					return
-				}
-				entries[i].Value = string(plaintext)
+		if reveal && cred.Type != "oauth" {
+			plaintext, err := crypto.Decrypt(cred.Ciphertext, cred.Nonce, s.encKey)
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, "Failed to decrypt credential")
+				return
 			}
+			entries[i].Value = string(plaintext)
 		}
 
 		if cred.Type == "oauth" && isMember {
@@ -274,7 +270,8 @@ func (s *Server) enrichOAuthEntry(ctx context.Context, vaultID string, entry *cr
 		entry.LastRefreshedAt = &t
 	}
 	if co.LastRefreshError != "" {
-		entry.LastRefreshError = &co.LastRefreshError
+		lastError := oauthRefreshErrorMessage
+		entry.LastRefreshError = &lastError
 	}
 	if co.AuthorizationURL != "" {
 		entry.AuthorizationURL = &co.AuthorizationURL
@@ -295,8 +292,9 @@ func (s *Server) enrichOAuthEntry(ctx context.Context, vaultID string, entry *cr
 	if co.TokenAuthMethod != "" {
 		entry.TokenAuthMethod = &co.TokenAuthMethod
 	}
-	if provider := s.managedOAuthProviderForConfig(co.AuthorizationURL, co.TokenURL, co.ClientID); provider != "" {
-		entry.ManagedProvider = &provider
+	if provider, managed, err := s.managedOAuthProviderForConfig(co); err == nil && managed {
+		providerID := provider.ID
+		entry.ManagedProvider = &providerID
 	}
 	if co.ConnectedAt != nil {
 		s := oauthSecretSentinel

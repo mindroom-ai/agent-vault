@@ -84,7 +84,7 @@ type OAuthStore interface {
 // OAuthClientSecretResolver returns an operator-managed client secret for an
 // OAuth configuration. ok=false means the credential uses its stored secret.
 type OAuthClientSecretResolver interface {
-	ResolveOAuthClientSecret(config *store.CredentialOAuth) (secret string, ok bool)
+	ResolveOAuthClientSecret(config *store.CredentialOAuth) (secret string, managed bool, err error)
 }
 
 // DynamicCredentialResolver resolves credential keys that are not stored
@@ -340,7 +340,11 @@ func (p *StoreCredentialProvider) maybeRefreshOAuth(ctx context.Context, vaultID
 
 func (p *StoreCredentialProvider) resolveOAuthClientSecret(config *store.CredentialOAuth) (string, error) {
 	if p.OAuthSecrets != nil {
-		if secret, ok := p.OAuthSecrets.ResolveOAuthClientSecret(config); ok {
+		secret, managed, err := p.OAuthSecrets.ResolveOAuthClientSecret(config)
+		if err != nil {
+			return "", err
+		}
+		if managed {
 			return secret, nil
 		}
 	}

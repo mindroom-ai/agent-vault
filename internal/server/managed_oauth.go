@@ -43,6 +43,11 @@ func (s *Server) applyManagedOAuthProvider(req *oauthConnectRequest) error {
 	if provider.RequireScopes && strings.TrimSpace(req.Scopes) == "" {
 		return fmt.Errorf("managed OAuth provider %q requires at least one scope", req.Provider)
 	}
+	if provider.OmitScopes {
+		req.Scopes = ""
+	}
+	req.ScopeSeparator = " "
+	req.DisablePKCE = false
 
 	req.AuthorizationURL = provider.AuthorizationURL
 	req.TokenURL = provider.TokenURL
@@ -54,45 +59,83 @@ func (s *Server) applyManagedOAuthProvider(req *oauthConnectRequest) error {
 	return nil
 }
 
-func (s *Server) managedOAuthProviderForConfig(authorizationURL, tokenURL, clientID string) string {
+func (s *Server) legacyManagedOAuthProviderForConfig(config *store.CredentialOAuth) string {
 	for _, id := range s.managedOAuthProviderIDs() {
 		provider := s.managedOAuthProviders[id]
-		if provider.AuthorizationURL == authorizationURL &&
-			provider.TokenURL == tokenURL &&
-			provider.ClientID == clientID {
+		if provider.AuthorizationURL == config.AuthorizationURL &&
+			provider.TokenURL == config.TokenURL &&
+			provider.ClientID == config.ClientID {
 			return id
 		}
 	}
 	return ""
 }
 
+func (s *Server) managedOAuthProviderForConfig(config *store.CredentialOAuth) (oauth.ManagedProvider, bool, error) {
+	if config == nil {
+		return oauth.ManagedProvider{}, false, nil
+	}
+
+	id := ""
+	if config.ManagedProvider != nil {
+		id = *config.ManagedProvider
+		if id == "" {
+			return oauth.ManagedProvider{}, false, nil
+		}
+	} else {
+		// Rows created before managed-provider provenance was persisted remain
+		// compatible only when their full stored policy is an exact match.
+		id = s.legacyManagedOAuthProviderForConfig(config)
+		if id == "" {
+			return oauth.ManagedProvider{}, false, nil
+		}
+	}
+
+	provider, ok := s.managedOAuthProviders[id]
+	if !ok {
+		return oauth.ManagedProvider{}, true, fmt.Errorf("managed OAuth provider %q is not configured", id)
+	}
+	if config.AuthorizationURL != provider.AuthorizationURL ||
+		config.TokenURL != provider.TokenURL ||
+		config.ClientID != provider.ClientID ||
+		config.TokenAuthMethod != provider.TokenAuthMethod ||
+		config.ScopeSeparator != " " || config.DisablePKCE ||
+		len(config.ClientSecretCT) != 0 || len(config.ClientSecretNonce) != 0 {
+		return oauth.ManagedProvider{}, true, fmt.Errorf("managed OAuth provider %q configuration does not match operator policy", id)
+	}
+	if provider.RequireScopes && strings.TrimSpace(config.Scopes) == "" {
+		return oauth.ManagedProvider{}, true, fmt.Errorf("managed OAuth provider %q requires at least one scope", id)
+	}
+	if provider.OmitScopes && strings.TrimSpace(config.Scopes) != "" {
+		return oauth.ManagedProvider{}, true, fmt.Errorf("managed OAuth provider %q does not accept caller scopes", id)
+	}
+	return provider, true, nil
+}
+
 type managedOAuthClientSecretResolver struct{ server *Server }
 
-func (r managedOAuthClientSecretResolver) ResolveOAuthClientSecret(config *store.CredentialOAuth) (string, bool) {
-	if config == nil {
-		return "", false
+func (r managedOAuthClientSecretResolver) ResolveOAuthClientSecret(config *store.CredentialOAuth) (string, bool, error) {
+	provider, managed, err := r.server.managedOAuthProviderForConfig(config)
+	if err != nil || !managed {
+		return "", managed, err
 	}
-	id := r.server.managedOAuthProviderForConfig(config.AuthorizationURL, config.TokenURL, config.ClientID)
-	if id == "" {
-		return "", false
-	}
-	provider, ok := r.server.managedOAuthProviders[id]
-	if !ok {
-		return "", false
-	}
-	return provider.ClientSecret, true
+	return provider.ClientSecret, true, nil
 }
 
 func (s *Server) oauthClientSecret(config *store.CredentialOAuth) (string, error) {
-	if secret, ok := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(config); ok {
+	secret, managed, err := (managedOAuthClientSecretResolver{s}).ResolveOAuthClientSecret(config)
+	if err != nil {
+		return "", err
+	}
+	if managed {
 		return secret, nil
 	}
 	if len(config.ClientSecretCT) == 0 {
 		return "", nil
 	}
-	secret, err := crypto.Decrypt(config.ClientSecretCT, config.ClientSecretNonce, s.encKey)
+	secretBytes, err := crypto.Decrypt(config.ClientSecretCT, config.ClientSecretNonce, s.encKey)
 	if err != nil {
 		return "", err
 	}
-	return string(secret), nil
+	return string(secretBytes), nil
 }

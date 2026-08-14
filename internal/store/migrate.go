@@ -500,7 +500,7 @@ func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 func copyCredentialOAuth(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialect) (int, error) {
 	rows, err := src.db.QueryContext(ctx,
-		`SELECT vault_id, credential_key, authorization_url, token_url, client_id,
+		`SELECT vault_id, credential_key, managed_provider, authorization_url, token_url, client_id,
 		        client_secret_ct, client_secret_nonce, scopes, scope_separator,
 		        disable_pkce, token_auth_method,
 		        refresh_token_ct, refresh_token_nonce,
@@ -516,7 +516,7 @@ func copyCredentialOAuth(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDial
 	n := 0
 	for rows.Next() {
 		var vaultID, credKey string
-		var authURL, tokenURL, clientID interface{}
+		var managedProvider, authURL, tokenURL, clientID interface{}
 		var clientSecretCT, clientSecretNonce []byte
 		var scopes, scopeSep, tokenAuthMethod interface{}
 		var disablePkce interface{}
@@ -527,7 +527,7 @@ func copyCredentialOAuth(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDial
 		var createdAt, updatedAt interface{}
 
 		if err := rows.Scan(
-			&vaultID, &credKey, &authURL, &tokenURL, &clientID,
+			&vaultID, &credKey, &managedProvider, &authURL, &tokenURL, &clientID,
 			&clientSecretCT, &clientSecretNonce, &scopes, &scopeSep,
 			&disablePkce, &tokenAuthMethod,
 			&refreshCT, &refreshNonce,
@@ -569,15 +569,15 @@ func copyCredentialOAuth(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDial
 
 		_, err = tx.ExecContext(ctx,
 			dstDialect.Rebind(`INSERT INTO credential_oauth
-				(vault_id, credential_key, authorization_url, token_url, client_id,
+				(vault_id, credential_key, managed_provider, authorization_url, token_url, client_id,
 				 client_secret_ct, client_secret_nonce, scopes, scope_separator,
 				 disable_pkce, token_auth_method,
 				 refresh_token_ct, refresh_token_nonce,
 				 token_expires_at, connected_at, last_refreshed_at,
 				 last_refresh_error, last_refresh_error_at,
 				 created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-			vaultID, credKey, authURL, tokenURL, clientID,
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			vaultID, credKey, managedProvider, authURL, tokenURL, clientID,
 			clientSecretCT, clientSecretNonce, scopes, scopeSep,
 			boolVal, tokenAuthMethod,
 			refreshCT, refreshNonce,

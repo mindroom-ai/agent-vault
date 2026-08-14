@@ -21,6 +21,16 @@ export interface OAuthProviderPreset {
   suggestedKey: string;
   scopes?: ScopePreset[];
   scopeBundles?: ScopeBundle[];
+  managedRequiresScopes?: boolean;
+  managedSuggestedKey?: string;
+}
+
+export function managedOAuthPolicy(provider: OAuthProviderPreset) {
+  return {
+    requiresScopes: provider.managedRequiresScopes ?? true,
+    suggestedKey: provider.managedSuggestedKey ?? provider.suggestedKey,
+    connectLabel: `Connect with ${provider.name}`,
+  };
 }
 
 const GOOGLE_SCOPES: ScopePreset[] = [
@@ -66,6 +76,8 @@ export const OAUTH_PROVIDERS: OAuthProviderPreset[] = [
     tokenUrl: "https://github.com/login/oauth/access_token",
     tokenAuthMethod: "client_secret_post",
     suggestedKey: "GITHUB",
+    managedRequiresScopes: false,
+    managedSuggestedKey: "GITHUB_TOKEN",
     scopes: [
       { value: "repo", description: "Full access to private repositories" },
       { value: "read:user", description: "Read user profile data" },

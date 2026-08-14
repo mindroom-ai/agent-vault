@@ -52,7 +52,8 @@ type Credential struct {
 type CredentialOAuth struct {
 	VaultID            string
 	CredentialKey      string
-	AuthorizationURL   string // empty = token upload mode
+	ManagedProvider    *string // nil = legacy row; empty = explicitly unmanaged
+	AuthorizationURL   string  // empty = token upload mode
 	TokenURL           string
 	ClientID           string
 	ClientSecretCT     []byte // nil for public clients

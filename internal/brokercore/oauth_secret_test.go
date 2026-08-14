@@ -1,6 +1,7 @@
 package brokercore
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Infisical/agent-vault/internal/crypto"
@@ -10,10 +11,32 @@ import (
 type staticOAuthClientSecretResolver struct {
 	secret string
 	ok     bool
+	err    error
 }
 
-func (r staticOAuthClientSecretResolver) ResolveOAuthClientSecret(_ *store.CredentialOAuth) (string, bool) {
-	return r.secret, r.ok
+func (r staticOAuthClientSecretResolver) ResolveOAuthClientSecret(_ *store.CredentialOAuth) (string, bool, error) {
+	return r.secret, r.ok, r.err
+}
+
+func TestResolveOAuthClientSecretFailsClosedOnManagedPolicyError(t *testing.T) {
+	key := make32(0x44)
+	storedCT, storedNonce, err := crypto.Encrypt([]byte("stored-secret"), key)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	policyErr := errors.New("managed OAuth policy mismatch")
+	provider := &StoreCredentialProvider{
+		EncKey:       key,
+		OAuthSecrets: staticOAuthClientSecretResolver{ok: true, err: policyErr},
+	}
+
+	_, err = provider.resolveOAuthClientSecret(&store.CredentialOAuth{
+		ClientSecretCT:    storedCT,
+		ClientSecretNonce: storedNonce,
+	})
+	if !errors.Is(err, policyErr) {
+		t.Fatalf("resolveOAuthClientSecret error = %v, want policy mismatch", err)
+	}
 }
 
 func TestResolveOAuthClientSecretPrefersManagedValue(t *testing.T) {
