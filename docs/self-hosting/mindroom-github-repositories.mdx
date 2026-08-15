@@ -1,0 +1,189 @@
+---
+title: "MindRoom GitHub repositories"
+description: "Configure the operator-owned GitHub App identity that provisions and brokers private MindRoom repositories."
+keywords: ["MindRoom", "GitHub App", "repository broker", "Kubernetes"]
+---
+
+## Security boundary
+
+This integration gives an opted-in MindRoom logical vault one private GitHub repository without giving the worker a GitHub credential. It is separate from [managed GitHub user OAuth](/self-hosting/environment-variables#managed-oauth-providers): requester-scoped OAuth continues to work through the existing broker rules.
+
+Agent Vault holds the GitHub App private key as instance configuration. A logical vault stores only an immutable binding containing the worker-key hash, repository ID, organization, repository name, and the exact `{"contents":"write"}` permission policy. Private keys and installation tokens are never stored in that binding or returned by the API.
+
+MindRoom derives the complete repository name. Agent Vault only validates the configured organization and `MindRoom-` prefix, creates that exact private repository, and refuses any conflicting vault or worker binding.
+
+Agent Vault places a versioned, non-secret HMAC ownership marker in the private repository description. If GitHub creates the repository but the create response is lost, a retry adopts only the exact private repository carrying the marker for that vault, worker hash, organization, and name. It never adopts or automatically deletes a name collision. Post-create access or persistence failures leave the marked repository retryable instead of risking a cross-instance delete race. Finish or reconcile any in-flight ensure request before rotating the repository-broker token, because that token derives the recovery marker; established bindings are unaffected by later rotation.
+
+## GitHub App requirements
+
+Create an organization-owned GitHub App with these repository permissions:
+
+- **Administration: Read and write** for private repository creation.
+- **Contents: Read and write** for Git and repository contents access.
+
+Install the App on `example-org` with **Only select repositories**. Agent Vault rejects an installation whose `repository_selection` is `all`. [GitHub automatically adds repositories created by the App to a selected-repository installation](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app). If GitHub requires an initial selection during installation, select one dedicated harmless control repository.
+
+Do not reuse the managed OAuth App client secret for this integration. Export the App's RSA private key as an unencrypted PKCS#1 or PKCS#8 PEM file.
+
+## Kubernetes identity contract
+
+Provision these two Secrets outside the chart. Do not commit placeholder values to an encrypted production Secret.
+
+| Secret | Key | Consumer |
+|--------|-----|----------|
+| `agent-vault-mindroom-github-app` | `app-id` | Agent Vault environment |
+| `agent-vault-mindroom-github-app` | `installation-id` | Agent Vault environment |
+| `agent-vault-mindroom-github-app` | `organization-id` | Agent Vault environment |
+| `agent-vault-mindroom-github-app` | `private-key.pem` | Agent Vault read-only file mount |
+| `agent-vault-mindroom-repository-broker` | `token` | Agent Vault and MindRoom control plane read-only file mounts |
+
+The numeric IDs are not secrets, but keeping all installation-specific identity values with the private key makes rotation and preflight atomic. Keep `organization=example-org` and `prefix=MindRoom-` in chart or application configuration, not in either Secret.
+
+Use these exact Agent Vault environment and mount values:
+
+```yaml
+env:
+  - name: AGENT_VAULT_MINDROOM_GITHUB_APP_ID
+    valueFrom:
+      secretKeyRef:
+        name: agent-vault-mindroom-github-app
+        key: app-id
+  - name: AGENT_VAULT_MINDROOM_GITHUB_APP_INSTALLATION_ID
+    valueFrom:
+      secretKeyRef:
+        name: agent-vault-mindroom-github-app
+        key: installation-id
+  - name: AGENT_VAULT_MINDROOM_GITHUB_APP_ORGANIZATION_ID
+    valueFrom:
+      secretKeyRef:
+        name: agent-vault-mindroom-github-app
+        key: organization-id
+  - name: AGENT_VAULT_MINDROOM_GITHUB_ORGANIZATION
+    value: example-org
+  - name: AGENT_VAULT_MINDROOM_GITHUB_REPOSITORY_PREFIX
+    value: MindRoom-
+  - name: AGENT_VAULT_MINDROOM_GITHUB_APP_PRIVATE_KEY_FILE
+    value: /var/run/secrets/agent-vault/mindroom-github-app/private-key.pem
+  - name: AGENT_VAULT_MINDROOM_REPOSITORY_BROKER_TOKEN_FILE
+    value: /var/run/secrets/agent-vault/mindroom-repository-broker/token
+volumeMounts:
+  - name: mindroom-github-app
+    mountPath: /var/run/secrets/agent-vault/mindroom-github-app
+    readOnly: true
+  - name: mindroom-repository-broker
+    mountPath: /var/run/secrets/agent-vault/mindroom-repository-broker
+    readOnly: true
+volumes:
+  - name: mindroom-github-app
+    secret:
+      secretName: agent-vault-mindroom-github-app
+  - name: mindroom-repository-broker
+    secret:
+      secretName: agent-vault-mindroom-repository-broker
+      items:
+        - key: token
+          path: token
+```
+
+All seven variables are required when the feature is enabled. Agent Vault parses the files and positive decimal IDs during startup and fails closed on partial or invalid local configuration.
+
+## Trusted broker API
+
+MindRoom's control plane calls the existing Agent Vault API service on port `14321`; there is no second broker service.
+
+```http
+POST /v1/internal/mindroom/repositories/ensure HTTP/1.1
+Authorization: Bearer <token from agent-vault-mindroom-repository-broker/token>
+X-Vault: <existing Agent Vault logical vault name>
+Content-Type: application/json
+
+{
+  "worker_key": "<opaque MindRoom worker key>",
+  "organization": "example-org",
+  "repository_name": "MindRoom-<MindRoom-derived suffix>"
+}
+```
+
+MindRoom owns the `worker_key` to logical-vault mapping and sends the existing Agent Vault vault name in `X-Vault`. Ordinary Agent Vault user, agent, and vault-session tokens cannot authenticate this endpoint. Only the MindRoom control plane receives the separate broker token.
+
+Use MindRoom's exact control-plane chart values:
+
+```yaml
+agentRepositories:
+  enabled: true
+  organization: example-org
+  prefix: MindRoom
+  brokerUrl: http://agent-vault:14321
+  brokerTokenSecret:
+    name: agent-vault-mindroom-repository-broker
+    key: token
+```
+
+`brokerUrl` is the pathless Agent Vault base URL. MindRoom appends `/v1/internal/mindroom/repositories/ensure`; including that path in the value is invalid and would double-append it.
+
+The two prefix settings are deliberately different forms of the same policy. MindRoom's `prefix: MindRoom` is the naming stem; its deterministic naming code inserts `-` before the derived suffix. Agent Vault's `AGENT_VAULT_MINDROOM_GITHUB_REPOSITORY_PREFIX=MindRoom-` includes that separator because it validates the complete supplied repository name. Keep both values exactly as shown.
+
+The chart mounts only that Secret key into the primary MindRoom control-plane container at `/etc/agent-repository-broker/token` and renders:
+
+```yaml
+env:
+  - name: MINDROOM_AGENT_REPOSITORY_BROKER_URL
+    value: http://agent-vault:14321
+  - name: MINDROOM_AGENT_REPOSITORY_BROKER_TOKEN_FILE
+    value: /etc/agent-repository-broker/token
+volumeMounts:
+  - name: agent-repository-broker
+    mountPath: /etc/agent-repository-broker
+    readOnly: true
+volumes:
+  - name: agent-repository-broker
+    secret:
+      secretName: agent-vault-mindroom-repository-broker
+      items:
+        - key: token
+          path: token
+```
+
+Do not mount the GitHub App identity Secret into MindRoom. Do not mount either Secret into worker pods.
+
+A newly created repository returns `201`; an exact existing binding returns `200`:
+
+```json
+{
+  "repository_id": "123456789",
+  "organization": "example-org",
+  "repository_name": "MindRoom-redwood",
+  "clone_url": "https://github.com/example-org/MindRoom-redwood.git"
+}
+```
+
+The response is credential-free. Conflicting repository names or immutable bindings return `409`; malformed requests return `400`; missing logical vaults return `404`; GitHub or persistence failures return `502`; disabled local configuration returns `503`.
+
+## Worker proxy contract
+
+Workers receive no new Agent Vault or GitHub environment variables. MindRoom continues to provide its existing `MINDROOM_WORKER_EGRESS_PROXY_*` settings, which route Git and API traffic through the Agent Vault MITM listener on port `14322`.
+
+For an exact bound `github.com/<organization>/<repository>.git/...` or `api.github.com/repos/<organization>/<repository>/...` path, Agent Vault mints an installation token with exactly:
+
+```json
+{
+  "repository_ids": [123456789],
+  "permissions": {"contents": "write"}
+}
+```
+
+Before persisting a new binding, Agent Vault proves that GitHub will mint this exact repository-scoped Contents-write capability. The proof token is immediately wiped. Runtime tokens exist only inside Agent Vault memory, are cached per repository until five minutes before expiry, and are never returned to MindRoom or its workers. Concurrent refreshes for one repository share one mint request. Requests outside the exact bound path continue through normal broker matching, preserving existing requester-scoped GitHub OAuth behavior.
+
+## Health, migration, and release
+
+`GET /health` on port `14321` keeps its database readiness contract and does not depend on GitHub availability. The trusted ensure call verifies the live installation ID, App ID, organization ID, selected-repository mode, and required permissions before provisioning.
+
+Schema migration runs automatically at startup for SQLite and PostgreSQL. It adds the credential-free immutable binding table; no private key, plaintext token, or durable installation token is migrated or stored.
+
+The `mindroom-image.yml` workflow publishes `linux/amd64` and `linux/arm64` to:
+
+```text
+ghcr.io/mindroom-ai/mindroom-agent-vault:sha-<full-main-commit>@sha256:<multi-arch-index-digest>
+```
+
+Pin staging and production to the immutable tag plus index digest after the change is merged and the publish workflow succeeds. Do not invent a tag, digest, or Secret value before those artifacts exist.

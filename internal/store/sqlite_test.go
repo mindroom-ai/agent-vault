@@ -1203,6 +1203,196 @@ func TestRootVaultHasBrokerConfig(t *testing.T) {
 	}
 }
 
+func TestGitHubRepositoryBindingRoundTripAndCascade(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+
+	vault, err := s.CreateVault(ctx, "github-binding")
+	if err != nil {
+		t.Fatalf("CreateVault: %v", err)
+	}
+	binding := GitHubRepositoryBinding{
+		VaultID:         vault.ID,
+		WorkerKeyHash:   "a4b50d12f47a340d8f44f9ad9a185e7f1f084ca22f7f0b74e65530b2b1c7d3e9",
+		RepositoryID:    "123456789",
+		Organization:    "example-org",
+		RepositoryName:  "MindRoom-redwood",
+		PermissionsJSON: `{"contents":"write"}`,
+	}
+	if err := s.CreateGitHubRepositoryBinding(ctx, binding); err != nil {
+		t.Fatalf("CreateGitHubRepositoryBinding: %v", err)
+	}
+
+	byVault, err := s.GetGitHubRepositoryBinding(ctx, vault.ID)
+	if err != nil {
+		t.Fatalf("GetGitHubRepositoryBinding: %v", err)
+	}
+	if byVault.VaultID != binding.VaultID || byVault.WorkerKeyHash != binding.WorkerKeyHash ||
+		byVault.RepositoryID != binding.RepositoryID || byVault.Organization != binding.Organization ||
+		byVault.RepositoryName != binding.RepositoryName || byVault.PermissionsJSON != `{"contents":"write"}` {
+		t.Fatalf("binding = %+v, want %+v", byVault, binding)
+	}
+
+	byWorker, err := s.GetGitHubRepositoryBindingByWorkerHash(ctx, binding.WorkerKeyHash)
+	if err != nil {
+		t.Fatalf("GetGitHubRepositoryBindingByWorkerHash: %v", err)
+	}
+	if byWorker.RepositoryID != binding.RepositoryID {
+		t.Fatalf("repository ID = %q, want %q", byWorker.RepositoryID, binding.RepositoryID)
+	}
+
+	if err := s.DeleteVault(ctx, vault.Name); err != nil {
+		t.Fatalf("DeleteVault: %v", err)
+	}
+	if _, err := s.GetGitHubRepositoryBinding(ctx, vault.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetGitHubRepositoryBinding after vault delete error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestGitHubRepositoryBindingRejectsMutableOrDuplicateCapabilities(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	firstVault, err := s.CreateVault(ctx, "github-binding-one")
+	if err != nil {
+		t.Fatalf("CreateVault first: %v", err)
+	}
+	secondVault, err := s.CreateVault(ctx, "github-binding-two")
+	if err != nil {
+		t.Fatalf("CreateVault second: %v", err)
+	}
+
+	first := GitHubRepositoryBinding{
+		VaultID:         firstVault.ID,
+		WorkerKeyHash:   "a4b50d12f47a340d8f44f9ad9a185e7f1f084ca22f7f0b74e65530b2b1c7d3e9",
+		RepositoryID:    "123456789",
+		Organization:    "example-org",
+		RepositoryName:  "MindRoom-redwood",
+		PermissionsJSON: `{"contents":"write"}`,
+	}
+	if err := s.CreateGitHubRepositoryBinding(ctx, first); err != nil {
+		t.Fatalf("CreateGitHubRepositoryBinding first: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		binding GitHubRepositoryBinding
+	}{
+		{
+			name: "second repository for same vault",
+			binding: GitHubRepositoryBinding{
+				VaultID: firstVault.ID, WorkerKeyHash: "b4b50d12f47a340d8f44f9ad9a185e7f1f084ca22f7f0b74e65530b2b1c7d3e9",
+				RepositoryID: "223456789", Organization: "example-org", RepositoryName: "MindRoom-other", PermissionsJSON: `{"contents":"write"}`,
+			},
+		},
+		{
+			name: "worker key reused by another vault",
+			binding: GitHubRepositoryBinding{
+				VaultID: secondVault.ID, WorkerKeyHash: first.WorkerKeyHash,
+				RepositoryID: "323456789", Organization: "example-org", RepositoryName: "MindRoom-worker-reuse", PermissionsJSON: `{"contents":"write"}`,
+			},
+		},
+		{
+			name: "repository ID reused by another vault",
+			binding: GitHubRepositoryBinding{
+				VaultID: secondVault.ID, WorkerKeyHash: "c4b50d12f47a340d8f44f9ad9a185e7f1f084ca22f7f0b74e65530b2b1c7d3e9",
+				RepositoryID: first.RepositoryID, Organization: "example-org", RepositoryName: "MindRoom-repo-reuse", PermissionsJSON: `{"contents":"write"}`,
+			},
+		},
+		{
+			name: "permission wider than contents write",
+			binding: GitHubRepositoryBinding{
+				VaultID: secondVault.ID, WorkerKeyHash: "d4b50d12f47a340d8f44f9ad9a185e7f1f084ca22f7f0b74e65530b2b1c7d3e9",
+				RepositoryID: "423456789", Organization: "example-org", RepositoryName: "MindRoom-admin", PermissionsJSON: `{"administration":"write","contents":"write"}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := s.CreateGitHubRepositoryBinding(ctx, tt.binding); err == nil {
+				t.Fatal("CreateGitHubRepositoryBinding succeeded, want immutable capability rejection")
+			}
+		})
+	}
+}
+
+func TestGitHubRepositoryBindingLockSerializesCallbacks(t *testing.T) {
+	s := openTestDB(t)
+	ctx := context.Background()
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- s.WithGitHubRepositoryBindingLock(ctx, func(GitHubRepositoryBindingStore) error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+
+	secondAttempted := make(chan struct{})
+	secondEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondAttempted)
+		secondDone <- s.WithGitHubRepositoryBindingLock(ctx, func(GitHubRepositoryBindingStore) error {
+			close(secondEntered)
+			return nil
+		})
+	}()
+	<-secondAttempted
+	select {
+	case <-secondEntered:
+		t.Fatal("second binding callback entered while first held lock")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second lock: %v", err)
+	}
+}
+
+func TestGitHubRepositoryBindingLockWaitIsContextAware(t *testing.T) {
+	s := openTestDB(t)
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- s.WithGitHubRepositoryBindingLock(context.Background(), func(GitHubRepositoryBindingStore) error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- s.WithGitHubRepositoryBindingLock(canceled, func(GitHubRepositoryBindingStore) error {
+			return errors.New("canceled waiter entered callback")
+		})
+	}()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled waiter error = %v, want context.Canceled", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(releaseFirst)
+		<-firstDone
+		t.Fatal("canceled waiter remained blocked on repository binding lock")
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+}
+
 // --- Proposals ---
 
 func TestProposalCRUD(t *testing.T) {

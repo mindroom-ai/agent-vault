@@ -22,6 +22,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/githubapp"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/netguard"
@@ -92,7 +93,14 @@ type Server struct {
 	infisicalDynamic      *infisical.DynamicResolver
 	oauthRefresher        *oauth.Refresher
 	managedOAuthProviders map[string]oauth.ManagedProvider
+	githubRepositories    GitHubRepositoryManager
 	telemetry             *telemetry.Telemetry
+}
+
+type GitHubRepositoryManager interface {
+	githubapp.RepositoryCredentialSource
+	AuthenticateBrokerToken(string) bool
+	EnsureRepository(context.Context, string, githubapp.EnsureRequest) (githubapp.RepositoryLease, bool, error)
 }
 
 // lockVaultServices acquires the per-vault mutation lock via the store's
@@ -135,6 +143,13 @@ func (s *Server) LogSink() requestlog.Sink { return s.logSink }
 // AttachTelemetry sets the PostHog telemetry client. When nil (the
 // default), captureEvent is a no-op.
 func (s *Server) AttachTelemetry(t *telemetry.Telemetry) { s.telemetry = t }
+
+// AttachGitHubRepositoryManager enables the trusted MindRoom provisioning
+// endpoint and chains repository-bound machine credentials into the existing
+// MITM proxy provider. It must be called before the MITM proxy is attached.
+func (s *Server) AttachGitHubRepositoryManager(manager GitHubRepositoryManager) {
+	s.githubRepositories = manager
+}
 
 // captureEvent sends a telemetry event if telemetry is configured.
 // actor may be nil for pre-auth endpoints (login, register); callers
@@ -197,7 +212,11 @@ func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 	// time, before Start() builds s.infisicalDynamic. The adapter reads the
 	// field per request, so resolution works regardless of init order.
 	p.Dynamic = lateDynamicResolver{s}
-	return p
+	var provider brokercore.CredentialProvider = p
+	if s.githubRepositories != nil {
+		provider = githubapp.NewRepositoryCredentialProvider(s.githubRepositories, provider)
+	}
+	return provider
 }
 
 // lateDynamicResolver defers to s.infisicalDynamic, which Start() builds after
@@ -815,6 +834,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	mux.HandleFunc("POST /v1/auth/resend-verification", ipAuth(limitBody(s.handleResendVerification)))
 	mux.HandleFunc("POST /v1/auth/forgot-password", ipAuth(limitBody(s.handleForgotPassword)))
 	mux.HandleFunc("POST /v1/auth/reset-password", ipAuth(limitBody(s.handleResetPassword)))
+	mux.HandleFunc("POST /v1/internal/mindroom/repositories/ensure", s.requireInitialized(ipAuth(limitBody(s.handleMindRoomRepositoryEnsure))))
 
 	actorAuthed := s.tier(ratelimit.TierAuthed, s.actorKeyer())
 
