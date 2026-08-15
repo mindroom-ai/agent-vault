@@ -210,6 +210,28 @@ type BrokerConfig struct {
 	UpdatedAt    time.Time
 }
 
+// GitHubRepositoryBinding is the immutable, credential-free capability that
+// binds one logical vault to one GitHub repository created for MindRoom.
+// Repository access tokens are minted at request time and never stored here.
+type GitHubRepositoryBinding struct {
+	VaultID         string
+	WorkerKeyHash   string
+	RepositoryID    string
+	Organization    string
+	RepositoryName  string
+	PermissionsJSON string
+	CreatedAt       time.Time
+}
+
+// GitHubRepositoryBindingStore is the mutation surface exposed while holding
+// the cluster-wide repository provisioning lock. PostgreSQL implements it on
+// the same transaction connection that owns the advisory lock.
+type GitHubRepositoryBindingStore interface {
+	CreateGitHubRepositoryBinding(context.Context, GitHubRepositoryBinding) error
+	GetGitHubRepositoryBinding(context.Context, string) (*GitHubRepositoryBinding, error)
+	GetGitHubRepositoryBindingByWorkerHash(context.Context, string) (*GitHubRepositoryBinding, error)
+}
+
 // Proposal represents a proposed set of changes (services + credential slots)
 // created by an agent, pending human approval.
 type Proposal struct {
@@ -517,6 +539,12 @@ type Store interface {
 	// Broker configs
 	SetBrokerConfig(ctx context.Context, vaultID string, servicesJSON string) (*BrokerConfig, error)
 	GetBrokerConfig(ctx context.Context, vaultID string) (*BrokerConfig, error)
+
+	// MindRoom-owned GitHub repository bindings
+	CreateGitHubRepositoryBinding(ctx context.Context, binding GitHubRepositoryBinding) error
+	GetGitHubRepositoryBinding(ctx context.Context, vaultID string) (*GitHubRepositoryBinding, error)
+	GetGitHubRepositoryBindingByWorkerHash(ctx context.Context, workerKeyHash string) (*GitHubRepositoryBinding, error)
+	WithGitHubRepositoryBindingLock(ctx context.Context, fn func(GitHubRepositoryBindingStore) error) error
 
 	// Master key
 	GetMasterKeyRecord(ctx context.Context) (*MasterKeyRecord, error)

@@ -46,6 +46,22 @@ Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` as an authorized callback for ea
 
 GitHub API services use the per-user access token as a bearer credential. Existing Git smart-HTTP services can use the same credential as their HTTP password, so choosing the default `GITHUB_TOKEN` key replaces a PAT without adding a second transport. No GitHub App private key or installation-token minting is involved. This server configuration does not modify downstream tool or deployment configuration.
 
+## MindRoom repository machine identity
+
+MindRoom repository brokering uses a separate operator-owned GitHub App machine identity. It does not replace or broaden the requester-scoped managed GitHub OAuth flow above. Set all seven variables to enable it; leaving all seven unset disables it, while partial configuration prevents startup.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AGENT_VAULT_MINDROOM_GITHUB_APP_ID` | Conditional | Positive decimal GitHub App ID, sourced from Secret key `app-id`. |
+| `AGENT_VAULT_MINDROOM_GITHUB_APP_INSTALLATION_ID` | Conditional | Positive decimal organization installation ID, sourced from Secret key `installation-id`. |
+| `AGENT_VAULT_MINDROOM_GITHUB_APP_ORGANIZATION_ID` | Conditional | Positive decimal GitHub organization account ID, sourced from Secret key `organization-id`. |
+| `AGENT_VAULT_MINDROOM_GITHUB_ORGANIZATION` | Conditional | Exact allowed organization login, configured as `example-org`. |
+| `AGENT_VAULT_MINDROOM_GITHUB_REPOSITORY_PREFIX` | Conditional | Required repository-name prefix, configured as `MindRoom-`. MindRoom remains responsible for deriving the complete name. |
+| `AGENT_VAULT_MINDROOM_GITHUB_APP_PRIVATE_KEY_FILE` | Conditional | Path to the App's unencrypted RSA private key in PKCS#1 or PKCS#8 PEM format. |
+| `AGENT_VAULT_MINDROOM_REPOSITORY_BROKER_TOKEN_FILE` | Conditional | Path to the separate control-plane bearer token. The trimmed token must be at least 32 bytes. |
+
+See [MindRoom GitHub repositories](/self-hosting/mindroom-github-repositories) for the exact GitHub App, Kubernetes Secret, broker API, proxy, health, and image contracts.
+
 ## Email SMTP configuration
 
 Configure SMTP to enable Agent Vault to send emails for verification codes, vault invites, and notifications.

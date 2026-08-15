@@ -74,9 +74,11 @@ func newPublicID() string {
 // SQLStore implements Store backed by a SQL database.
 // The dialect field abstracts the few differences between SQLite and PostgreSQL.
 type SQLStore struct {
-	db      *sql.DB
-	dialect Dialect
-	vaultMu sync.Map // vaultID (string) -> *sync.Mutex (SQLite only)
+	db                       *sql.DB
+	dialect                  Dialect
+	vaultMu                  sync.Map // vaultID (string) -> *sync.Mutex (SQLite only)
+	githubRepositoryGateOnce sync.Once
+	githubRepositoryGate     chan struct{}
 }
 
 // Open opens (or creates) a SQLite database at dbPath, configures WAL mode
@@ -1861,6 +1863,136 @@ func (s *SQLStore) GetBrokerConfig(ctx context.Context, vaultID string) (*Broker
 		vaultID,
 	)
 	return s.scanBrokerConfig(row)
+}
+
+// --- MindRoom-owned GitHub repository bindings ---
+
+type githubRepositoryBindingExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type lockedGitHubRepositoryBindingStore struct {
+	store    *SQLStore
+	executor githubRepositoryBindingExecutor
+}
+
+func (s *lockedGitHubRepositoryBindingStore) CreateGitHubRepositoryBinding(ctx context.Context, binding GitHubRepositoryBinding) error {
+	return s.store.createGitHubRepositoryBinding(ctx, s.executor, binding)
+}
+
+func (s *lockedGitHubRepositoryBindingStore) GetGitHubRepositoryBinding(ctx context.Context, vaultID string) (*GitHubRepositoryBinding, error) {
+	return s.store.getGitHubRepositoryBinding(ctx, s.executor, vaultID)
+}
+
+func (s *lockedGitHubRepositoryBindingStore) GetGitHubRepositoryBindingByWorkerHash(ctx context.Context, workerKeyHash string) (*GitHubRepositoryBinding, error) {
+	return s.store.getGitHubRepositoryBindingByWorkerHash(ctx, s.executor, workerKeyHash)
+}
+
+// WithGitHubRepositoryBindingLock serializes the irreversible GitHub
+// create-and-bind transition. PostgreSQL runs the callback on the transaction
+// connection that owns the advisory lock, avoiding pool starvation from
+// pinned lock waiters and locked code that queries through a second connection.
+func (s *SQLStore) WithGitHubRepositoryBindingLock(ctx context.Context, fn func(GitHubRepositoryBindingStore) error) error {
+	s.githubRepositoryGateOnce.Do(func() {
+		s.githubRepositoryGate = make(chan struct{}, 1)
+	})
+	select {
+	case s.githubRepositoryGate <- struct{}{}:
+		defer func() { <-s.githubRepositoryGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	if s.dialect.Name() == "sqlite" {
+		return fn(s)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning GitHub repository binding transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("github-repository-provisioning"))
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", int64(h.Sum64())); err != nil {
+		return fmt.Errorf("locking GitHub repository bindings: %w", err)
+	}
+	locked := &lockedGitHubRepositoryBindingStore{store: s, executor: tx}
+	if err := fn(locked); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing GitHub repository binding transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLStore) CreateGitHubRepositoryBinding(ctx context.Context, binding GitHubRepositoryBinding) error {
+	return s.createGitHubRepositoryBinding(ctx, s.db, binding)
+}
+
+func (s *SQLStore) createGitHubRepositoryBinding(ctx context.Context, executor githubRepositoryBindingExecutor, binding GitHubRepositoryBinding) error {
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = time.Now().UTC()
+	}
+	_, err := executor.ExecContext(ctx, s.dialect.Rebind(`INSERT INTO github_repository_bindings
+		(vault_id, worker_key_hash, repository_id, organization, repository_name, permissions_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`),
+		binding.VaultID,
+		binding.WorkerKeyHash,
+		binding.RepositoryID,
+		binding.Organization,
+		binding.RepositoryName,
+		binding.PermissionsJSON,
+		s.dialect.FormatTime(binding.CreatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("creating GitHub repository binding: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLStore) GetGitHubRepositoryBinding(ctx context.Context, vaultID string) (*GitHubRepositoryBinding, error) {
+	return s.getGitHubRepositoryBinding(ctx, s.db, vaultID)
+}
+
+func (s *SQLStore) getGitHubRepositoryBinding(ctx context.Context, executor githubRepositoryBindingExecutor, vaultID string) (*GitHubRepositoryBinding, error) {
+	return s.scanGitHubRepositoryBinding(executor.QueryRowContext(ctx,
+		s.dialect.Rebind(`SELECT vault_id, worker_key_hash, repository_id, organization, repository_name, permissions_json, created_at
+			FROM github_repository_bindings WHERE vault_id = ?`),
+		vaultID,
+	))
+}
+
+func (s *SQLStore) GetGitHubRepositoryBindingByWorkerHash(ctx context.Context, workerKeyHash string) (*GitHubRepositoryBinding, error) {
+	return s.getGitHubRepositoryBindingByWorkerHash(ctx, s.db, workerKeyHash)
+}
+
+func (s *SQLStore) getGitHubRepositoryBindingByWorkerHash(ctx context.Context, executor githubRepositoryBindingExecutor, workerKeyHash string) (*GitHubRepositoryBinding, error) {
+	return s.scanGitHubRepositoryBinding(executor.QueryRowContext(ctx,
+		s.dialect.Rebind(`SELECT vault_id, worker_key_hash, repository_id, organization, repository_name, permissions_json, created_at
+			FROM github_repository_bindings WHERE worker_key_hash = ?`),
+		workerKeyHash,
+	))
+}
+
+func (s *SQLStore) scanGitHubRepositoryBinding(row *sql.Row) (*GitHubRepositoryBinding, error) {
+	var binding GitHubRepositoryBinding
+	var createdAt interface{}
+	if err := row.Scan(
+		&binding.VaultID,
+		&binding.WorkerKeyHash,
+		&binding.RepositoryID,
+		&binding.Organization,
+		&binding.RepositoryName,
+		&binding.PermissionsJSON,
+		&createdAt,
+	); err != nil {
+		return nil, err
+	}
+	binding.CreatedAt, _ = s.dialect.ScanTime(createdAt)
+	return &binding, nil
 }
 
 // --- Proposals ---
