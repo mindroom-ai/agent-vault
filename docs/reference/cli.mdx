@@ -45,6 +45,13 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `AGENT_VAULT_OAUTH_GOOGLE_CLIENT_SECRET` | Client secret for an instance-managed Google OAuth Web application. Set together with `AGENT_VAULT_OAUTH_GOOGLE_CLIENT_ID`; the value is unset from the process environment after startup. |
     | `AGENT_VAULT_OAUTH_GITHUB_CLIENT_ID` | Client ID for an instance-managed GitHub App user authorization flow. Set together with `AGENT_VAULT_OAUTH_GITHUB_CLIENT_SECRET`. |
     | `AGENT_VAULT_OAUTH_GITHUB_CLIENT_SECRET` | Client secret for an instance-managed GitHub App. Set together with `AGENT_VAULT_OAUTH_GITHUB_CLIENT_ID`; the value is unset from the process environment after startup. |
+    | `AGENT_VAULT_MINDROOM_GITHUB_APP_ID` | Positive decimal ID for the operator-owned MindRoom GitHub App. All seven `AGENT_VAULT_MINDROOM_*` variables are required together. |
+    | `AGENT_VAULT_MINDROOM_GITHUB_APP_INSTALLATION_ID` | Positive decimal ID for the App's selected-repository organization installation. |
+    | `AGENT_VAULT_MINDROOM_GITHUB_APP_ORGANIZATION_ID` | Positive decimal GitHub organization account ID used to pin the installation identity. |
+    | `AGENT_VAULT_MINDROOM_GITHUB_ORGANIZATION` | Exact organization login allowed for MindRoom-owned repositories. |
+    | `AGENT_VAULT_MINDROOM_GITHUB_REPOSITORY_PREFIX` | Exact prefix required on complete repository names supplied by MindRoom. MindRoom remains responsible for deriving each name. |
+    | `AGENT_VAULT_MINDROOM_GITHUB_APP_PRIVATE_KEY_FILE` | Path to the App's unencrypted RSA private key in PKCS#1 or PKCS#8 PEM format. The key is read from the file and never stored in a logical vault. |
+    | `AGENT_VAULT_MINDROOM_REPOSITORY_BROKER_TOKEN_FILE` | Path to the dedicated MindRoom control-plane bearer token file. The token must be at least 32 bytes and is not an ordinary Agent Vault session token. See [MindRoom GitHub repositories](/self-hosting/mindroom-github-repositories). |
     | `FLY_APP_NAME` | Auto-detected on Fly.io. When `AGENT_VAULT_ADDR` is unset, derives the base URL as `https://<FLY_APP_NAME>.fly.dev`. |
     | `AGENT_VAULT_SMTP_HOST` | SMTP server host. If unset, email notifications are silently disabled. |
     | `AGENT_VAULT_SMTP_PORT` | SMTP server port (default `587`) |

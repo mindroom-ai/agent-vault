@@ -44,6 +44,18 @@ func (s *recordingSink) snapshot() []requestlog.Record {
 	return out
 }
 
+func waitForRecords(t *testing.T, sink *recordingSink, want int) []requestlog.Record {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		rows := sink.snapshot()
+		if len(rows) >= want || time.Now().After(deadline) {
+			return rows
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // dialProxy opens a plain TCP connection to the proxy listener (no
 // CONNECT, no absolute-form request). Tests use it to write malformed
 // or hand-shaped request lines so we can exercise the dispatch
@@ -508,7 +520,7 @@ func TestMITMForwardEmitsRequestLogRow(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	rows := sink.snapshot()
+	rows := waitForRecords(t, sink, 1)
 	if len(rows) != 1 {
 		t.Fatalf("got %d records, want 1", len(rows))
 	}
@@ -590,7 +602,7 @@ func TestMITMForwardKeepalivePersistsAcrossRequests(t *testing.T) {
 	if got := hits.Load(); got != 2 {
 		t.Fatalf("upstream hits = %d, want 2", got)
 	}
-	if rows := sink.snapshot(); len(rows) != 2 {
+	if rows := waitForRecords(t, sink, 2); len(rows) != 2 {
 		t.Fatalf("got %d log rows, want 2", len(rows))
 	}
 }
