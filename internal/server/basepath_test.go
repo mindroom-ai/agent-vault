@@ -346,9 +346,15 @@ func TestBuiltAssetsAtRootAndNestedMount(t *testing.T) {
 		if html.Code != http.StatusOK || !bytes.Contains(html.Body.Bytes(), asset) || !strings.Contains(html.Body.String(), tc.baseTag) {
 			t.Errorf("index at %q = %d, missing built asset or base tag %q", tc.prefix, html.Code, tc.baseTag)
 		}
+		if got := html.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("index at %q Cache-Control = %q, want no-store", tc.prefix, got)
+		}
 		got := serveBasePath(srv, http.MethodGet, tc.path)
 		if got.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), want) {
 			t.Errorf("asset at %q = %d, content differs from embedded build", tc.path, got.Code)
+		}
+		if cacheControl := got.Header().Get("Cache-Control"); cacheControl != cacheImmutable {
+			t.Errorf("asset at %q Cache-Control = %q, want %q", tc.path, cacheControl, cacheImmutable)
 		}
 	}
 }
