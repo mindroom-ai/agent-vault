@@ -68,6 +68,14 @@ func resolveBaseURL(addr string) string {
 	return "http://" + addr
 }
 
+func resolveUIBasePath() (string, error) {
+	path, err := server.NormalizeUIBasePath(os.Getenv("AGENT_VAULT_UI_BASE_PATH"))
+	if err != nil {
+		return "", fmt.Errorf("invalid AGENT_VAULT_UI_BASE_PATH: %w", err)
+	}
+	return path, nil
+}
+
 // buildLogger constructs the process-wide slog logger. Text handler to
 // stderr keeps it readable in a terminal without a dependency bump.
 func buildLogger(level slog.Level) *slog.Logger {
@@ -99,6 +107,10 @@ var serverCmd = &cobra.Command{
 		maxRespBytes, _ := cmd.Flags().GetInt64("max-response-bytes")
 		maxReqBytes, _ := cmd.Flags().GetInt64("max-request-bytes")
 		addr := fmt.Sprintf("%s:%d", host, port)
+		uiBasePath, err := resolveUIBasePath()
+		if err != nil {
+			return err
+		}
 
 		logLevel, err := resolveLogLevel(logLevelFlag, logLevelChanged)
 		if err != nil {
@@ -190,7 +202,7 @@ var serverCmd = &cobra.Command{
 		smtpCfg := notify.LoadSMTPConfig()
 		_ = os.Unsetenv("AGENT_VAULT_SMTP_PASSWORD")
 		notifier := notify.New(smtpCfg)
-		srv := server.New(addr, db, masterKey.Key(), notifier, initialized, baseURL, logger)
+		srv := server.New(addr, db, masterKey.Key(), notifier, initialized, baseURL, uiBasePath, logger)
 		if err := configureManagedOAuthProviders(srv); err != nil {
 			return err
 		}
@@ -611,10 +623,14 @@ func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxR
 	defer func() { _ = db.Close() }()
 
 	baseURL := resolveBaseURL(addr)
+	uiBasePath, err := resolveUIBasePath()
+	if err != nil {
+		return err
+	}
 	smtpCfg := notify.LoadSMTPConfig()
 	_ = os.Unsetenv("AGENT_VAULT_SMTP_PASSWORD")
 	notifier := notify.New(smtpCfg)
-	srv := server.New(addr, db, key, notifier, initialized, baseURL, logger)
+	srv := server.New(addr, db, key, notifier, initialized, baseURL, uiBasePath, logger)
 	if err := configureManagedOAuthProviders(srv); err != nil {
 		return err
 	}

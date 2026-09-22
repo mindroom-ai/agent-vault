@@ -162,7 +162,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusInternalServerError, "Failed to create session")
 			return
 		}
-		http.SetCookie(w, sessionCookie(r, s.baseURL, session.ID, int(userSessionAbsoluteTTL.Seconds())))
+		http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, session.ID, int(userSessionAbsoluteTTL.Seconds())))
 
 		s.captureEvent(r, "av.register", nil, map[string]string{"email": req.Email, "role": "owner"})
 		jsonCreated(w, registerResponse{
@@ -284,7 +284,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
-	http.SetCookie(w, sessionCookie(r, s.baseURL, session.ID, int(userSessionAbsoluteTTL.Seconds())))
+	http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, session.ID, int(userSessionAbsoluteTTL.Seconds())))
 
 	jsonOK(w, verifyResponse{
 		Email:         user.Email,
@@ -498,7 +498,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, sessionCookie(r, s.baseURL, session.ID, int(userSessionAbsoluteTTL.Seconds())))
+	http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, session.ID, int(userSessionAbsoluteTTL.Seconds())))
 
 	jsonOK(w, map[string]interface{}{
 		"message":       "Password reset successfully.",
@@ -660,7 +660,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, sessionCookie(r, s.baseURL, session.ID, int(userSessionAbsoluteTTL.Seconds())))
+	http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, session.ID, int(userSessionAbsoluteTTL.Seconds())))
 
 	s.captureEvent(r, "av.login", nil, map[string]string{"email": user.Email})
 	jsonOK(w, loginResponse{
@@ -740,7 +740,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, sessionCookie(r, s.baseURL, newSess.ID, int(userSessionAbsoluteTTL.Seconds())))
+	http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, newSess.ID, int(userSessionAbsoluteTTL.Seconds())))
 
 	jsonOK(w, loginResponse{
 		Token:     newSess.ID,
@@ -774,7 +774,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear session cookie.
-	http.SetCookie(w, sessionCookie(r, s.baseURL, "", -1))
+	http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, "", -1))
 
 	jsonOK(w, map[string]string{"status": "deleted", "email": user.Email})
 }
@@ -782,19 +782,30 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 // handleLogout clears the session cookie and deletes the session.
 // Handles both cookie-based and Bearer token sessions.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	var token string
+	tokens := make(map[string]struct{})
 	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
-		token = strings.TrimPrefix(header, "Bearer ")
-	}
-	if c, err := r.Cookie("av_session"); err == nil && c.Value != "" {
-		if token == "" {
-			token = c.Value
+		if token := strings.TrimPrefix(header, "Bearer "); token != "" {
+			tokens[token] = struct{}{}
 		}
 	}
-	if token != "" {
+	if len(tokens) == 0 {
+		for _, cookie := range r.Cookies() {
+			if cookie.Name == "av_session" && cookie.Value != "" {
+				tokens[cookie.Value] = struct{}{}
+			}
+		}
+	}
+	for token := range tokens {
 		_ = s.store.DeleteSession(r.Context(), token)
 		s.touchCache.Delete(token)
 	}
-	http.SetCookie(w, sessionCookie(r, s.baseURL, "", -1))
+	s.clearBrowserSessionCookies(w, r)
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) clearBrowserSessionCookies(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, "", -1))
+	if s.uiBasePath != "/" {
+		http.SetCookie(w, sessionCookie(r, s.baseURL, "/", "", -1))
+	}
 }

@@ -64,6 +64,11 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Frontend not built", http.StatusInternalServerError)
 		return
 	}
+	indexHTML, err = renderSPAIndex(indexHTML, s.uiBasePath)
+	if err != nil {
+		http.Error(w, "Frontend build is incompatible", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(indexHTML)

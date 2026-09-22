@@ -221,7 +221,7 @@ func (s *Server) handleProposalCreate(w http.ResponseWriter, r *http.Request) {
 
 	nsName := resolvedVault.Name
 
-	approvalURL := fmt.Sprintf("%s/approve/%d?token=%s", s.baseURL, cs.ID, cs.ApprovalToken)
+	approvalURL := fmt.Sprintf("%s/%d?token=%s", s.UIURL("/approve"), cs.ID, cs.ApprovalToken)
 
 	// Resolve agent name for the notification email.
 	proposalAgentName := ""

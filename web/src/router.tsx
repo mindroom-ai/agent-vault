@@ -6,6 +6,7 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 import { apiFetch } from "./lib/api";
+import { uiBasePath } from "./lib/basePath";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -395,7 +396,7 @@ const routeTree = rootRoute.addChildren([
 
 // --- Router ---
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({ routeTree, basepath: uiBasePath });
 
 // Type registration for type-safe navigation
 declare module "@tanstack/react-router" {

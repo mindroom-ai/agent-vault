@@ -1000,6 +1000,22 @@ func TestResolveLogLevel(t *testing.T) {
 	}
 }
 
+func TestResolveUIBasePath(t *testing.T) {
+	t.Setenv("AGENT_VAULT_UI_BASE_PATH", "/vault/")
+	got, err := resolveUIBasePath()
+	if err != nil {
+		t.Fatalf("resolveUIBasePath: %v", err)
+	}
+	if got != "/vault" {
+		t.Fatalf("resolveUIBasePath = %q, want /vault", got)
+	}
+
+	t.Setenv("AGENT_VAULT_UI_BASE_PATH", "https://example.com/vault")
+	if _, err := resolveUIBasePath(); err == nil || !strings.Contains(err.Error(), "AGENT_VAULT_UI_BASE_PATH") {
+		t.Fatalf("resolveUIBasePath invalid error = %v", err)
+	}
+}
+
 // Verify the cobra-level --log-level validation surfaces the error before
 // the command tries to open the DB or touch the master key.
 func TestServerLogLevelInvalidSurface(t *testing.T) {

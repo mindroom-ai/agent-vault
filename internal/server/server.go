@@ -67,6 +67,7 @@ type Server struct {
 	initialized        bool         // true when at least one owner account exists
 	lastInitCheck      atomic.Int64 // unix-millis of last DB check for initialization (throttle)
 	baseURL            string       // externally-reachable base URL (e.g. "https://sb.example.com")
+	uiBasePath         string       // normalized browser UI mount path ("/" or no trailing slash)
 	skillCLI           []byte       // embedded CLI skill content (served at GET /v1/skills/cli)
 	defaultServices    []broker.Service
 	defaultServicesErr error
@@ -255,6 +256,22 @@ func (s *Server) Logger() *slog.Logger { return s.logger }
 // BaseURL returns the externally-reachable base URL of the server
 // (e.g. "http://127.0.0.1:14321").
 func (s *Server) BaseURL() string { return s.baseURL }
+
+// UIBasePath returns the normalized path where the browser UI is mounted.
+func (s *Server) UIBasePath() string { return s.uiBasePath }
+
+// UIURL returns an externally reachable URL for a browser-facing UI path.
+func (s *Server) UIURL(path string) string { return s.baseURL + s.uiPath(path) }
+
+func (s *Server) uiPath(path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if s.uiBasePath == "/" {
+		return path
+	}
+	return s.uiBasePath + path
+}
 
 // Store is the persistence interface used by the server.
 type Store interface {
@@ -769,7 +786,7 @@ func limitBody(next http.HandlerFunc) http.HandlerFunc {
 // The initialized parameter indicates whether at least one owner account exists.
 // When false, all endpoints except /health and POST /v1/init return 503.
 // logger must be non-nil; tests can pass slog.New(slog.DiscardHandler).
-func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, initialized bool, baseURL string, logger *slog.Logger) *Server {
+func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, initialized bool, baseURL, uiBasePath string, logger *slog.Logger) *Server {
 	mux := http.NewServeMux()
 
 	rlCfg, _ := ratelimit.LoadFromEnv()
@@ -779,7 +796,6 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	s := &Server{
 		httpServer: &http.Server{
 			Addr:              addr,
-			Handler:           securityHeaders(rl.GlobalMiddleware(logger)(mux)),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      60 * time.Second,
@@ -790,6 +806,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 		notifier:           notifier,
 		initialized:        initialized,
 		baseURL:            strings.TrimRight(baseURL, "/"),
+		uiBasePath:         uiBasePath,
 		defaultServices:    defaultServices,
 		defaultServicesErr: defaultServicesErr,
 		logger:             logger,
@@ -945,6 +962,9 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	// React app static assets (Vite outputs to /assets/ with base "/")
 	webFS, _ := fs.Sub(webDistFS, "webdist")
 	mux.Handle("GET /assets/", http.FileServer(http.FS(webFS)))
+	mux.Handle("GET /fonts/", http.FileServer(http.FS(webFS)))
+	mux.Handle("GET /favicon.svg", http.FileServer(http.FS(webFS)))
+	mux.Handle("GET /favicon.png", http.FileServer(http.FS(webFS)))
 	mux.Handle("GET /vite.svg", http.FileServer(http.FS(webFS)))
 
 	// SPA catch-all: serve index.html for all frontend routes
@@ -962,6 +982,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	mux.HandleFunc("GET /change-password", s.handleSPA)
 	mux.HandleFunc("GET /account/{path...}", s.handleSPA)
 	mux.HandleFunc("GET /{$}", s.handleSPA)
+	s.httpServer.Handler = securityHeaders(rl.GlobalMiddleware(logger)(mountUIBasePath(mux, uiBasePath)))
 
 	return s
 }
@@ -1056,7 +1077,7 @@ func (s *Server) Start() error {
 	go func() {
 		fmt.Printf("Agent Vault server listening on %s\n", s.baseURL)
 		if !s.initialized {
-			fmt.Printf("Run `agent-vault auth register` or visit %s to create the owner account\n", s.baseURL)
+			fmt.Printf("Run `agent-vault auth register` or visit %s to create the owner account\n", s.UIURL("/"))
 		}
 		if err := s.httpServer.Serve(httpLn); err != nil && err != http.ErrServerClosed {
 			errCh <- err
@@ -1346,11 +1367,11 @@ func isSecureRequest(r *http.Request, baseURL string) bool {
 
 // sessionCookie builds an av_session cookie with all hardening flags set.
 // Secure is set based on TLS state or the server's configured baseURL.
-func sessionCookie(r *http.Request, baseURL, value string, maxAge int) *http.Cookie {
+func sessionCookie(r *http.Request, baseURL, path, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     "av_session",
 		Value:    value,
-		Path:     "/",
+		Path:     path,
 		HttpOnly: true,
 		Secure:   isSecureRequest(r, baseURL),
 		SameSite: http.SameSiteStrictMode,
