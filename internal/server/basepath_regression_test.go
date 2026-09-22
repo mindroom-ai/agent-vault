@@ -83,13 +83,14 @@ func TestUIBasePathCanonicalRedirectsStayMounted(t *testing.T) {
 	)
 
 	tests := []struct {
-		path string
-		want string
+		path      string
+		want      string
+		delegated bool
 	}{
-		{path: "/vault/vaults?next=%2Fdemo%2Fone", want: "/vault/vaults/?next=%2Fdemo%2Fone"},
-		{path: "/vault/account", want: "/vault/account/"},
-		{path: "/vault/manage", want: "/vault/manage/"},
-		{path: "/vault/assets", want: "/vault/assets/"},
+		{path: "/vault/vaults?next=%2Fdemo%2Fone", want: "/vault/vaults/?next=%2Fdemo%2Fone", delegated: true},
+		{path: "/vault/account", want: "/vault/account/", delegated: true},
+		{path: "/vault/manage", want: "/vault/manage/", delegated: true},
+		{path: "/vault/assets", want: "/vault/assets/", delegated: true},
 		{path: "/vault/vaults//demo/services?next=%2Fone", want: "/vault/vaults/demo/services?next=%2Fone"},
 		{path: "/vault/vaults//demo/a%2Fb", want: "/vault/vaults/demo/a%2Fb"},
 		{path: "/vault/vaults/../../v1/status?next=%2Fone", want: "/vault/v1/status?next=%2Fone"},
@@ -99,14 +100,35 @@ func TestUIBasePathCanonicalRedirectsStayMounted(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			srv.httpServer.Handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusTemporaryRedirect {
-				t.Fatalf("status = %d, want %d", rec.Code, http.StatusTemporaryRedirect)
+			wantStatus := http.StatusTemporaryRedirect
+			if tt.delegated {
+				wantStatus = rootMuxRedirectStatus(t, strings.TrimPrefix(tt.path, "/vault"), strings.TrimPrefix(tt.want, "/vault"))
+			}
+			if rec.Code != wantStatus {
+				t.Fatalf("status = %d, want underlying mux status %d", rec.Code, wantStatus)
 			}
 			if got := rec.Header().Get("Location"); got != tt.want {
 				t.Fatalf("Location = %q, want %q", got, tt.want)
 			}
 		})
 	}
+}
+
+// rootMuxRedirectStatus records the Go ServeMux redirect status for the same
+// route without a UI mount. ServeMux uses 301 in Go 1.25 and 307 in Go 1.26;
+// mounting must preserve its choice while rebasing the Location header.
+func rootMuxRedirectStatus(t *testing.T, path, wantLocation string) int {
+	t.Helper()
+	srv := newTestServer()
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusMovedPermanently && rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("root route %q status = %d, want canonical redirect", path, rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != wantLocation {
+		t.Fatalf("root route %q Location = %q, want %q", path, got, wantLocation)
+	}
+	return rec.Code
 }
 
 func TestUIBasePathMountNameOverlapRedirects(t *testing.T) {
@@ -127,10 +149,11 @@ func TestUIBasePathMountNameOverlapRedirects(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, requestPath, nil)
 			srv.httpServer.Handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusTemporaryRedirect {
-				t.Fatalf("status = %d, want %d", rec.Code, http.StatusTemporaryRedirect)
-			}
 			want := basePath + basePath + "/?next=%2Fone"
+			wantStatus := rootMuxRedirectStatus(t, basePath+"?next=%2Fone", basePath+"/?next=%2Fone")
+			if rec.Code != wantStatus {
+				t.Fatalf("status = %d, want underlying mux status %d", rec.Code, wantStatus)
+			}
 			if got := rec.Header().Get("Location"); got != want {
 				t.Fatalf("Location = %q, want %q", got, want)
 			}
