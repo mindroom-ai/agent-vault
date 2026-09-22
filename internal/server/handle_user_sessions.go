@@ -82,7 +82,10 @@ func (s *Server) handleRevokeUserSession(w http.ResponseWriter, r *http.Request)
 	// on-disk session.json without a follow-up sniffing call.
 	selfRevoke := caller.PublicID == publicID
 	if selfRevoke {
-		http.SetCookie(w, sessionCookie(r, s.baseURL, s.uiBasePath, "", -1))
+		if _, bearerAuth := bearerSessionToken(r); !bearerAuth {
+			s.deletePresentedSessions(r.Context(), browserSessionTokens(r), caller.UserID)
+		}
+		s.clearBrowserSessionCookies(w, r)
 	}
 	jsonOK(w, revokeSessionResponse{Status: "revoked", Current: selfRevoke})
 }

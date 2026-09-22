@@ -782,25 +782,48 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 // handleLogout clears the session cookie and deletes the session.
 // Handles both cookie-based and Bearer token sessions.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	tokens := make(map[string]struct{})
-	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
-		if token := strings.TrimPrefix(header, "Bearer "); token != "" {
-			tokens[token] = struct{}{}
-		}
-	}
-	if len(tokens) == 0 {
-		for _, cookie := range r.Cookies() {
-			if cookie.Name == "av_session" && cookie.Value != "" {
-				tokens[cookie.Value] = struct{}{}
-			}
-		}
-	}
-	for token := range tokens {
-		_ = s.store.DeleteSession(r.Context(), token)
-		s.touchCache.Delete(token)
-	}
+	s.deletePresentedSessions(r.Context(), requestSessionTokens(r), "")
 	s.clearBrowserSessionCookies(w, r)
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func bearerSessionToken(r *http.Request) (string, bool) {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimPrefix(header, "Bearer ")
+	return token, token != ""
+}
+
+func browserSessionTokens(r *http.Request) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == "av_session" && cookie.Value != "" {
+			tokens[cookie.Value] = struct{}{}
+		}
+	}
+	return tokens
+}
+
+func requestSessionTokens(r *http.Request) map[string]struct{} {
+	if token, ok := bearerSessionToken(r); ok {
+		return map[string]struct{}{token: {}}
+	}
+	return browserSessionTokens(r)
+}
+
+func (s *Server) deletePresentedSessions(ctx context.Context, tokens map[string]struct{}, userID string) {
+	for token := range tokens {
+		if userID != "" {
+			sess, err := s.store.GetSession(ctx, token)
+			if err != nil || sess == nil || sess.UserID != userID {
+				continue
+			}
+		}
+		_ = s.store.DeleteSession(ctx, token)
+		s.touchCache.Delete(token)
+	}
 }
 
 func (s *Server) clearBrowserSessionCookies(w http.ResponseWriter, r *http.Request) {

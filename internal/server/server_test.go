@@ -1553,6 +1553,51 @@ func TestSelfRevokeClearsCookie(t *testing.T) {
 	}
 }
 
+func TestSelfRevokeBearerDoesNotRevokeCookieSession(t *testing.T) {
+	ms := setupMockStoreWithUser(t, "admin@test.com", "test-password-123")
+	srv := newTestServer(withStore(ms))
+
+	login := func() loginResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/auth/login",
+			strings.NewReader(`{"email":"admin@test.com","password":"test-password-123"}`),
+		)
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+		}
+		var response loginResponse
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatalf("decode login: %v", err)
+		}
+		return response
+	}
+
+	bearer := login()
+	cookie := login()
+	current := ms.sessions[bearer.Token]
+	if current == nil {
+		t.Fatal("Bearer session was not stored")
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/sessions/"+current.PublicID, nil)
+	req.Header.Set("Authorization", "Bearer "+bearer.Token)
+	req.AddCookie(&http.Cookie{Name: "av_session", Value: cookie.Token})
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self-revoke: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := ms.sessions[bearer.Token]; ok {
+		t.Fatal("Bearer session survives self-revoke")
+	}
+	if _, ok := ms.sessions[cookie.Token]; !ok {
+		t.Fatal("cookie session was revoked by Bearer self-revoke")
+	}
+}
+
 func TestRevokeOtherSessionLeavesCookieAlone(t *testing.T) {
 	ms := setupMockStoreWithUser(t, "admin@test.com", "test-password-123")
 	srv := newTestServer(withStore(ms))
