@@ -53,7 +53,7 @@ const vite = await createServer({
   configFile: false,
   logLevel: "error",
   plugins: [react()],
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false },
   appType: "custom",
   optimizeDeps: { noDiscovery: true },
 });

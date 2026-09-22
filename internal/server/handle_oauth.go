@@ -169,7 +169,7 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI := s.baseURL + "/v1/oauth/callback"
+	redirectURI := s.UIURL("/v1/oauth/callback")
 	authURL := oauth.BuildAuthorizationURL(
 		req.AuthorizationURL, req.ClientID, redirectURI,
 		stateRaw, codeChallenge, req.Scopes, scopeSep, req.DisablePKCE,
@@ -221,7 +221,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI := s.baseURL + "/v1/oauth/callback"
+	redirectURI := s.UIURL("/v1/oauth/callback")
 	tok, err := oauth.Exchange(ctx, oauth.ExchangeConfig{
 		TokenURL:        oauthCfg.TokenURL,
 		ClientID:        oauthCfg.ClientID,
@@ -577,7 +577,7 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) redirectOAuthComplete(w http.ResponseWriter, r *http.Request, vault, key, status, message string) {
-	u := s.baseURL + "/oauth/complete?status=" + url.QueryEscape(status)
+	u := s.UIURL("/oauth/complete") + "?status=" + url.QueryEscape(status)
 	if vault != "" {
 		u += "&vault=" + url.QueryEscape(vault)
 	}
