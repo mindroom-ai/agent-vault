@@ -83,7 +83,7 @@ func (s *Server) handleRevokeUserSession(w http.ResponseWriter, r *http.Request)
 	selfRevoke := caller.PublicID == publicID
 	if selfRevoke {
 		if _, bearerAuth := bearerSessionToken(r); !bearerAuth {
-			s.deletePresentedSessions(r.Context(), browserSessionTokens(r), caller.UserID)
+			s.deleteBrowserSessions(r.Context(), r, caller.UserID)
 		}
 		s.clearBrowserSessionCookies(w, r)
 	}

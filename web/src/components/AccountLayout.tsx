@@ -1,8 +1,8 @@
 import { type ReactNode, useRef, useState } from "react";
+import { basePath } from "../lib/basePath";
 import { Link, Outlet, useNavigate, useRouteContext } from "@tanstack/react-router";
 import type { AuthContext } from "../router";
 import Navbar from "./Navbar";
-import { uiURL } from "../lib/basePath";
 
 type AccountTab = "settings";
 
@@ -44,7 +44,7 @@ export default function AccountLayout() {
         >
           <div className="px-4 pt-5 pb-3">
             <a
-              href={uiURL("/")}
+              href={basePath || "/"}
               onClick={(e) => {
                 e.preventDefault();
                 if (isExiting) return;

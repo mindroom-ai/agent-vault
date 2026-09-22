@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate, useRouteContext } from "@tansta
 import type { AuthContext, VaultContext } from "../router";
 import Navbar from "./Navbar";
 import { apiFetch } from "../lib/api";
-import { uiURL } from "../lib/basePath";
+import { basePath } from "../lib/basePath";
 
 type VaultTab = "proposals" | "logs" | "services" | "credentials" | "users" | "agents" | "tokens" | "settings";
 
@@ -177,7 +177,7 @@ export default function VaultLayout() {
         >
           <div className="px-4 pt-5 pb-3">
             <a
-              href={uiURL("/")}
+              href={basePath || "/"}
               onClick={(e) => {
                 e.preventDefault();
                 if (isExiting) return;

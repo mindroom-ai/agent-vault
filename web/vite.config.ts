@@ -6,18 +6,12 @@ const API_TARGET = process.env.VITE_API_URL ?? "http://localhost:14321";
 
 export default defineConfig({
   plugins: [
-    {
-      name: "development-ui-base-path",
-      apply: "serve",
-      transformIndexHtml(html) {
-        return html
-          .replaceAll("__AGENT_VAULT_UI_BASE_HREF__", "/")
-          .replaceAll("__AGENT_VAULT_UI_BASE_PATH__", "/");
-      },
-    },
     react(),
     tailwindcss(),
   ],
+  // Relative asset URLs so one build works at any mount path. index.html
+  // carries <base href="/" /> which the Go server rewrites at serve time
+  // when --ui-base-path is set; hashed assets are never rewritten.
   base: "./",
   build: {
     outDir: "../internal/server/webdist",

@@ -1,11 +1,11 @@
 import { useState, useRef, type FormEvent } from "react";
+import { basePath } from "../lib/basePath";
 import { Link, useLoaderData } from "@tanstack/react-router";
 import Navbar from "../components/Navbar";
 import Button from "../components/Button";
 import { ErrorBanner, formatInstanceRole } from "../components/shared";
 import { DomainNotice } from "../components/DomainNotice";
 import { apiFetch } from "../lib/api";
-import { uiURL } from "../lib/basePath";
 
 interface InviteVault {
   vault_name: string;
@@ -207,7 +207,7 @@ function ExistingUserForm({
           )}
         </p>
         <a
-          href={uiURL("/login")}
+          href={`${basePath}/login`}
           className="w-full py-3.5 px-4 bg-primary text-primary-text rounded-lg text-[15px] font-semibold transition-colors flex items-center justify-center gap-2 hover:bg-primary-hover no-underline"
         >
           Log In
@@ -327,7 +327,7 @@ function NewUserForm({
           )}
         </p>
         <a
-          href={uiURL("/login")}
+          href={`${basePath}/login`}
           className="w-full py-3.5 px-4 bg-primary text-primary-text rounded-lg text-[15px] font-semibold transition-colors flex items-center justify-center gap-2 hover:bg-primary-hover no-underline"
         >
           Log In

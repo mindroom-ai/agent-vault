@@ -16,7 +16,7 @@ func TestBuiltUIRootAndNestedBasePaths(t *testing.T) {
 	stylesheetPattern := regexp.MustCompile(`href="\./(assets/[^"]+\.css)"`)
 	fontPattern := regexp.MustCompile(`url\(\.\./(fonts/[^)]+\.woff2)\)`)
 
-	for _, basePath := range []string{"/", "/vault"} {
+	for _, basePath := range []string{"", "/vault"} {
 		t.Run(basePath, func(t *testing.T) {
 			srv := New(
 				"127.0.0.1:0",
@@ -29,7 +29,7 @@ func TestBuiltUIRootAndNestedBasePaths(t *testing.T) {
 				slog.New(slog.DiscardHandler),
 			)
 			prefix := ""
-			if basePath != "/" {
+			if basePath != "" {
 				prefix = basePath
 			}
 
@@ -42,8 +42,7 @@ func TestBuiltUIRootAndNestedBasePaths(t *testing.T) {
 			if prefix != "" {
 				baseHref = prefix + "/"
 			}
-			if !strings.Contains(body, `<base href="`+baseHref+`">`) ||
-				!strings.Contains(body, `content="`+basePath+`"`) {
+			if !strings.Contains(body, `<base href="`+baseHref+`" />`) {
 				t.Fatalf("deep link has wrong runtime base configuration: %s", body)
 			}
 

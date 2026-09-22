@@ -169,7 +169,7 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI := s.oauthCallbackURL()
+	redirectURI := s.UIURL("/v1/oauth/callback")
 	authURL := oauth.BuildAuthorizationURL(
 		req.AuthorizationURL, req.ClientID, redirectURI,
 		stateRaw, codeChallenge, req.Scopes, scopeSep, req.DisablePKCE,
@@ -221,7 +221,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI := s.oauthCallbackURL()
+	redirectURI := s.UIURL("/v1/oauth/callback")
 	tok, err := oauth.Exchange(ctx, oauth.ExchangeConfig{
 		TokenURL:        oauthCfg.TokenURL,
 		ClientID:        oauthCfg.ClientID,
@@ -588,10 +588,6 @@ func (s *Server) redirectOAuthComplete(w http.ResponseWriter, r *http.Request, v
 		u += "&message=" + url.QueryEscape(message)
 	}
 	http.Redirect(w, r, u, http.StatusFound)
-}
-
-func (s *Server) oauthCallbackURL() string {
-	return s.UIURL("/v1/oauth/callback")
 }
 
 func isValidHTTPURL(raw string) bool {

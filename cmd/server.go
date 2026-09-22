@@ -68,14 +68,6 @@ func resolveBaseURL(addr string) string {
 	return "http://" + addr
 }
 
-func resolveUIBasePath() (string, error) {
-	path, err := server.NormalizeUIBasePath(os.Getenv("AGENT_VAULT_UI_BASE_PATH"))
-	if err != nil {
-		return "", fmt.Errorf("invalid AGENT_VAULT_UI_BASE_PATH: %w", err)
-	}
-	return path, nil
-}
-
 // buildLogger constructs the process-wide slog logger. Text handler to
 // stderr keeps it readable in a terminal without a dependency bump.
 func buildLogger(level slog.Level) *slog.Logger {
@@ -106,11 +98,12 @@ var serverCmd = &cobra.Command{
 		logLevelChanged := cmd.Flags().Changed("log-level")
 		maxRespBytes, _ := cmd.Flags().GetInt64("max-response-bytes")
 		maxReqBytes, _ := cmd.Flags().GetInt64("max-request-bytes")
-		addr := fmt.Sprintf("%s:%d", host, port)
-		uiBasePath, err := resolveUIBasePath()
+		uiBasePathFlag, _ := cmd.Flags().GetString("ui-base-path")
+		uiBasePath, err := server.NormalizeBasePath(uiBasePathFlag)
 		if err != nil {
 			return err
 		}
+		addr := fmt.Sprintf("%s:%d", host, port)
 
 		logLevel, err := resolveLogLevel(logLevelFlag, logLevelChanged)
 		if err != nil {
@@ -120,7 +113,7 @@ var serverCmd = &cobra.Command{
 
 		// --- Detached child path: read master key + initialized flag from stdin pipe ---
 		if os.Getenv("_AGENT_VAULT_DETACHED") == "1" {
-			return runDetachedChild(host, addr, mitmPort, logger, maxRespBytes, maxReqBytes)
+			return runDetachedChild(host, addr, mitmPort, uiBasePath, logger, maxRespBytes, maxReqBytes)
 		}
 
 		// Pre-flight before unlocking the vault: don't make the user type a
@@ -193,7 +186,7 @@ var serverCmd = &cobra.Command{
 			if logLevelChanged {
 				explicitLogLevel = &logLevelFlag
 			}
-			return spawnDetached(cmd, masterKey, initialized, host, port, mitmPort, addr, explicitLogLevel, maxRespBytes, maxReqBytes)
+			return spawnDetached(cmd, masterKey, initialized, host, port, mitmPort, addr, uiBasePath, explicitLogLevel, maxRespBytes, maxReqBytes)
 		}
 
 		// --- Foreground path ---
@@ -599,7 +592,7 @@ func readPasswordFromStdin() ([]byte, error) {
 
 // runDetachedChild is the entry point for the detached child process.
 // It reads 33 bytes from stdin: 32-byte master key + 1-byte initialized flag.
-func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxRespBytes, maxReqBytes int64) error {
+func runDetachedChild(host, addr string, mitmPort int, uiBasePath string, logger *slog.Logger, maxRespBytes, maxReqBytes int64) error {
 	buf := make([]byte, 33)
 	if _, err := io.ReadFull(os.Stdin, buf); err != nil {
 		return fmt.Errorf("reading master key from pipe: %w", err)
@@ -623,10 +616,6 @@ func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxR
 	defer func() { _ = db.Close() }()
 
 	baseURL := resolveBaseURL(addr)
-	uiBasePath, err := resolveUIBasePath()
-	if err != nil {
-		return err
-	}
 	smtpCfg := notify.LoadSMTPConfig()
 	_ = os.Unsetenv("AGENT_VAULT_SMTP_PASSWORD")
 	notifier := notify.New(smtpCfg)
@@ -648,7 +637,7 @@ func runDetachedChild(host, addr string, mitmPort int, logger *slog.Logger, maxR
 // spawnDetached re-execs the server as a background process, passing the master key + initialized flag via a pipe.
 // explicitLogLevel, when non-nil, forwards the parent's --log-level flag to the child so a flag-only
 // invocation (no env var) still takes effect after re-exec.
-func spawnDetached(cmd *cobra.Command, masterKey *auth.MasterKey, initialized bool, host string, port, mitmPort int, addr string, explicitLogLevel *string, maxRespBytes, maxReqBytes int64) error {
+func spawnDetached(cmd *cobra.Command, masterKey *auth.MasterKey, initialized bool, host string, port, mitmPort int, addr, uiBasePath string, explicitLogLevel *string, maxRespBytes, maxReqBytes int64) error {
 	defer masterKey.Wipe()
 
 	exe, err := os.Executable()
@@ -672,12 +661,7 @@ func spawnDetached(cmd *cobra.Command, masterKey *auth.MasterKey, initialized bo
 		return fmt.Errorf("opening log file: %w", err)
 	}
 
-	childArgs := []string{"server", "--port", strconv.Itoa(port), "--host", host, "--mitm-port", strconv.Itoa(mitmPort)}
-	if explicitLogLevel != nil {
-		childArgs = append(childArgs, "--log-level", *explicitLogLevel)
-	}
-	childArgs = append(childArgs, "--max-response-bytes", strconv.FormatInt(maxRespBytes, 10))
-	childArgs = append(childArgs, "--max-request-bytes", strconv.FormatInt(maxReqBytes, 10))
+	childArgs := detachedServerArgs(host, port, mitmPort, uiBasePath, explicitLogLevel, maxRespBytes, maxReqBytes)
 	child := exec.Command(exe, childArgs...)
 	child.Stdin = pr
 	child.Stdout = logFile
@@ -751,6 +735,17 @@ func spawnDetached(cmd *cobra.Command, masterKey *auth.MasterKey, initialized bo
 	return fmt.Errorf("server did not respond within 3 seconds")
 }
 
+func detachedServerArgs(host string, port, mitmPort int, uiBasePath string, explicitLogLevel *string, maxRespBytes, maxReqBytes int64) []string {
+	childArgs := []string{"server", "--port", strconv.Itoa(port), "--host", host, "--mitm-port", strconv.Itoa(mitmPort)}
+	if explicitLogLevel != nil {
+		childArgs = append(childArgs, "--log-level", *explicitLogLevel)
+	}
+	childArgs = append(childArgs, "--max-response-bytes", strconv.FormatInt(maxRespBytes, 10))
+	childArgs = append(childArgs, "--max-request-bytes", strconv.FormatInt(maxReqBytes, 10))
+	childArgs = append(childArgs, "--ui-base-path", uiBasePath)
+	return childArgs
+}
+
 func serverLogPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -814,6 +809,7 @@ func init() {
 	serverCmd.Flags().String("log-level", "info", "log level: info (default) or debug (per-request proxy logs)")
 	serverCmd.Flags().Int64("max-response-bytes", defaultMaxResponseBytes(), "max response body bytes streamed to agents (default: unlimited; also respects AGENT_VAULT_MAX_RESPONSE_BYTES)")
 	serverCmd.Flags().Int64("max-request-bytes", defaultMaxRequestBytes(), "max request body bytes forwarded to upstreams (default: 1 GiB; also respects AGENT_VAULT_MAX_REQUEST_BYTES)")
+	serverCmd.Flags().String("ui-base-path", defaultUIBasePath(), "URL path prefix for the browser UI, e.g. /vault (root control APIs remain available; also respects AGENT_VAULT_UI_BASE_PATH)")
 	serverCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(serverCmd)
 }

@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -10,15 +9,18 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Infisical/agent-vault/internal/store"
 )
 
-func TestNormalizeUIBasePath(t *testing.T) {
+func TestNormalizeBasePathExtended(t *testing.T) {
 	t.Parallel()
 
 	valid := map[string]string{
-		"":              "/",
-		"   ":           "/",
-		"/":             "/",
+		"":              "",
+		"   ":           "",
+		"/":             "",
 		"vault":         "/vault",
 		"/vault":        "/vault",
 		" /vault/ ":     "/vault",
@@ -29,12 +31,12 @@ func TestNormalizeUIBasePath(t *testing.T) {
 		input, want := input, want
 		t.Run("valid_"+input, func(t *testing.T) {
 			t.Parallel()
-			got, err := NormalizeUIBasePath(input)
+			got, err := NormalizeBasePath(input)
 			if err != nil {
-				t.Fatalf("NormalizeUIBasePath(%q): %v", input, err)
+				t.Fatalf("NormalizeBasePath(%q): %v", input, err)
 			}
 			if got != want {
-				t.Fatalf("NormalizeUIBasePath(%q) = %q, want %q", input, got, want)
+				t.Fatalf("NormalizeBasePath(%q) = %q, want %q", input, got, want)
 			}
 		})
 	}
@@ -61,82 +63,8 @@ func TestNormalizeUIBasePath(t *testing.T) {
 		input := input
 		t.Run("invalid_"+input, func(t *testing.T) {
 			t.Parallel()
-			if got, err := NormalizeUIBasePath(input); err == nil {
-				t.Fatalf("NormalizeUIBasePath(%q) = %q, want error", input, got)
-			}
-		})
-	}
-}
-
-func TestServerRoutesUnderUIBasePath(t *testing.T) {
-	srv := New(
-		"127.0.0.1:0",
-		newMockStore(),
-		make([]byte, 32),
-		nil,
-		true,
-		"https://vault.example.com",
-		"/vault",
-		slog.New(slog.DiscardHandler),
-	)
-
-	if got := srv.UIBasePath(); got != "/vault" {
-		t.Fatalf("UIBasePath() = %q, want /vault", got)
-	}
-	if got := srv.UIURL("/invite/token"); got != "https://vault.example.com/vault/invite/token" {
-		t.Fatalf("UIURL() = %q", got)
-	}
-
-	for _, path := range []string{"/v1/status", "/vault/v1/status"} {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		srv.httpServer.Handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET %s: status = %d, body = %s", path, rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), `"initialized":true`) {
-			t.Fatalf("GET %s: unexpected body %s", path, rec.Body.String())
-		}
-	}
-}
-
-func TestUIBasePathHandler(t *testing.T) {
-	t.Parallel()
-
-	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, r.URL.Path)
-	})
-	handler := mountUIBasePath(app, "/vault")
-
-	tests := []struct {
-		path       string
-		wantStatus int
-		wantBody   string
-		wantHeader string
-	}{
-		{path: "/vault", wantStatus: http.StatusPermanentRedirect, wantHeader: "/vault/"},
-		{path: "/vault?token=example", wantStatus: http.StatusPermanentRedirect, wantHeader: "/vault/?token=example"},
-		{path: "/vault/", wantStatus: http.StatusOK, wantBody: "/"},
-		{path: "/vault/assets/app.js", wantStatus: http.StatusOK, wantBody: "/assets/app.js"},
-		{path: "/vault/v1/status", wantStatus: http.StatusOK, wantBody: "/v1/status"},
-		{path: "/vault/vaults/example/services", wantStatus: http.StatusOK, wantBody: "/vaults/example/services"},
-		{path: "/v1/status", wantStatus: http.StatusOK, wantBody: "/v1/status"},
-		{path: "/vaulted", wantStatus: http.StatusOK, wantBody: "/vaulted"},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			handler.ServeHTTP(rec, req)
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
-			if got := rec.Body.String(); tt.wantStatus == http.StatusOK && got != tt.wantBody {
-				t.Fatalf("body = %q, want %q", got, tt.wantBody)
-			}
-			if got := rec.Header().Get("Location"); got != tt.wantHeader {
-				t.Fatalf("Location = %q, want %q", got, tt.wantHeader)
+			if got, err := NormalizeBasePath(input); err == nil {
+				t.Fatalf("NormalizeBasePath(%q) = %q, want error", input, got)
 			}
 		})
 	}
@@ -155,12 +83,10 @@ func TestUIBasePathCanonicalRedirectsStayMounted(t *testing.T) {
 	)
 
 	tests := []struct {
-		path        string
-		fragment    string
-		rawFragment string
-		want        string
+		path string
+		want string
 	}{
-		{path: "/vault/vaults?next=%2Fdemo%2Fone", fragment: "section/one", rawFragment: "section%2Fone", want: "/vault/vaults/?next=%2Fdemo%2Fone#section%2Fone"},
+		{path: "/vault/vaults?next=%2Fdemo%2Fone", want: "/vault/vaults/?next=%2Fdemo%2Fone"},
 		{path: "/vault/account", want: "/vault/account/"},
 		{path: "/vault/manage", want: "/vault/manage/"},
 		{path: "/vault/assets", want: "/vault/assets/"},
@@ -172,8 +98,6 @@ func TestUIBasePathCanonicalRedirectsStayMounted(t *testing.T) {
 		t.Run(tt.path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			req.URL.Fragment = tt.fragment
-			req.URL.RawFragment = tt.rawFragment
 			srv.httpServer.Handler.ServeHTTP(rec, req)
 			if rec.Code != http.StatusTemporaryRedirect {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusTemporaryRedirect)
@@ -214,69 +138,6 @@ func TestUIBasePathMountNameOverlapRedirects(t *testing.T) {
 	}
 }
 
-func TestRenderSPAIndex(t *testing.T) {
-	t.Parallel()
-
-	template := []byte(`<base href="__AGENT_VAULT_UI_BASE_HREF__"><meta name="agent-vault-ui-base-path" content="__AGENT_VAULT_UI_BASE_PATH__">`)
-	tests := []struct {
-		basePath string
-		wantBase string
-		wantMeta string
-	}{
-		{basePath: "/", wantBase: `href="/"`, wantMeta: `content="/"`},
-		{basePath: "/vault", wantBase: `href="/vault/"`, wantMeta: `content="/vault"`},
-	}
-	for _, tt := range tests {
-		got, err := renderSPAIndex(template, tt.basePath)
-		if err != nil {
-			t.Fatalf("renderSPAIndex(%q): %v", tt.basePath, err)
-		}
-		body := string(got)
-		if !strings.Contains(body, tt.wantBase) || !strings.Contains(body, tt.wantMeta) {
-			t.Fatalf("rendered body %q does not contain %q and %q", body, tt.wantBase, tt.wantMeta)
-		}
-		if strings.Contains(body, "__AGENT_VAULT_UI_BASE_") {
-			t.Fatalf("rendered body retains placeholder: %q", body)
-		}
-	}
-}
-
-func TestUIBasePathScopesOAuthRedirectsAndCookies(t *testing.T) {
-	srv := New(
-		"127.0.0.1:0",
-		newMockStore(),
-		make([]byte, 32),
-		nil,
-		true,
-		"https://vault.example.com",
-		"/vault",
-		slog.New(slog.DiscardHandler),
-	)
-	if got := srv.oauthCallbackURL(); got != "https://vault.example.com/vault/v1/oauth/callback" {
-		t.Fatalf("oauthCallbackURL() = %q", got)
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/vault/v1/oauth/callback", nil)
-	srv.redirectOAuthComplete(rec, req, "demo", "TOKEN", "success", "")
-	if got := rec.Header().Get("Location"); got != "https://vault.example.com/vault/oauth/complete?status=success&vault=demo&key=TOKEN" {
-		t.Fatalf("OAuth completion Location = %q", got)
-	}
-
-	cookie := sessionCookie(req, srv.baseURL, srv.uiBasePath, "session-token", 3600)
-	if cookie.Path != "/vault" {
-		t.Fatalf("cookie Path = %q, want /vault", cookie.Path)
-	}
-	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
-		t.Fatalf("cookie security flags changed: %#v", cookie)
-	}
-
-	rootCookie := sessionCookie(req, srv.baseURL, "/", "session-token", 3600)
-	if rootCookie.Path != "/" {
-		t.Fatalf("root cookie Path = %q, want /", rootCookie.Path)
-	}
-}
-
 func TestUIBasePathMigrationLogoutClearsOnlyCurrentBrowserSessions(t *testing.T) {
 	ms := newMockStore()
 	root := New(
@@ -286,7 +147,7 @@ func TestUIBasePathMigrationLogoutClearsOnlyCurrentBrowserSessions(t *testing.T)
 		nil,
 		false,
 		"https://vault.example.com",
-		"/",
+		"",
 		slog.New(slog.DiscardHandler),
 	)
 
@@ -372,7 +233,7 @@ func TestUIBasePathSelfRevokeClearsOnlyCurrentBrowserSessions(t *testing.T) {
 		nil,
 		false,
 		"https://vault.example.com",
-		"/",
+		"",
 		slog.New(slog.DiscardHandler),
 	)
 
@@ -508,5 +369,126 @@ func TestLogoutBearerDoesNotRevokeCookieSession(t *testing.T) {
 	}
 	if _, ok := ms.sessions[cookieToken]; !ok {
 		t.Fatal("cookie session was revoked by Bearer logout")
+	}
+}
+
+func TestSelfRevokeBearerDoesNotRevokeCookieSession(t *testing.T) {
+	ms := setupMockStoreWithUser(t, "admin@test.com", "test-password-123")
+	srv := newTestServer(withStore(ms))
+
+	login := func() loginResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/auth/login",
+			strings.NewReader(`{"email":"admin@test.com","password":"test-password-123"}`),
+		)
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+		}
+		var response loginResponse
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatalf("decode login: %v", err)
+		}
+		return response
+	}
+
+	bearer := login()
+	cookie := login()
+	current := ms.sessions[bearer.Token]
+	if current == nil {
+		t.Fatal("Bearer session was not stored")
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/sessions/"+current.PublicID, nil)
+	req.Header.Set("Authorization", "Bearer "+bearer.Token)
+	req.AddCookie(&http.Cookie{Name: "av_session", Value: cookie.Token})
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self-revoke: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := ms.sessions[bearer.Token]; ok {
+		t.Fatal("Bearer session survives self-revoke")
+	}
+	if _, ok := ms.sessions[cookie.Token]; !ok {
+		t.Fatal("cookie session was revoked by Bearer self-revoke")
+	}
+}
+
+func TestMountedRedirectsStayPrefixed(t *testing.T) {
+	srv := New("127.0.0.1:0", newMockStore(), make([]byte, 32), nil, true, "https://vault.example.com", "/vault", slog.New(slog.DiscardHandler))
+	for _, c := range []struct{ path, want string }{
+		{"/vault/manage", "/vault/manage/"},
+		{"/vault/account", "/vault/account/"},
+		{"/vault?token=example", "/vault/?token=example"},
+	} {
+		t.Run(c.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.path, nil))
+			if rec.Header().Get("Location") != c.want {
+				t.Errorf("status=%d Location=%q; want %q", rec.Code, rec.Header().Get("Location"), c.want)
+			}
+		})
+	}
+}
+
+func TestSlashOnlyPrefixDoesNotPanic(t *testing.T) {
+	defer func() {
+		if value := recover(); value != nil {
+			t.Errorf("prefix caused panic: %v", value)
+		}
+	}()
+	if value, err := NormalizeBasePath("//"); err == nil {
+		t.Errorf("accepted invalid prefix as %q", value)
+	}
+}
+
+func TestMigrationLogoutRespectsSessionOwner(t *testing.T) {
+	ms := newMockStore()
+	expires := time.Now().Add(time.Hour)
+	ms.sessions["first"] = &store.Session{ID: "first", UserID: "user-a", ExpiresAt: &expires}
+	ms.sessions["second"] = &store.Session{ID: "second", UserID: "user-a", ExpiresAt: &expires}
+	ms.sessions["other-user"] = &store.Session{ID: "other-user", UserID: "user-b", ExpiresAt: &expires}
+	srv := newTestServerWithBasePath("/vault", withStore(ms))
+	req := httptest.NewRequest(http.MethodPost, "/vault/v1/auth/logout", nil)
+	for _, token := range []string{"first", "other-user", "second"} {
+		req.AddCookie(&http.Cookie{Name: "av_session", Value: token})
+	}
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logout = %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, token := range []string{"first", "second"} {
+		if _, ok := ms.sessions[token]; ok {
+			t.Errorf("session %q survives logout", token)
+		}
+	}
+	if _, ok := ms.sessions["other-user"]; !ok {
+		t.Fatal("another user's session was revoked")
+	}
+}
+
+func TestBearerLogoutKeepsBrowserSession(t *testing.T) {
+	ms := newMockStore()
+	expires := time.Now().Add(time.Hour)
+	ms.sessions["bearer"] = &store.Session{ID: "bearer", UserID: "user-a", ExpiresAt: &expires}
+	ms.sessions["browser"] = &store.Session{ID: "browser", UserID: "user-b", ExpiresAt: &expires}
+	srv := newTestServerWithBasePath("/vault", withStore(ms))
+	req := httptest.NewRequest(http.MethodPost, "/vault/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer bearer")
+	req.AddCookie(&http.Cookie{Name: "av_session", Value: "browser"})
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logout = %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := ms.sessions["bearer"]; ok {
+		t.Fatal("Bearer session survives logout")
+	}
+	if _, ok := ms.sessions["browser"]; !ok {
+		t.Fatal("browser session was revoked by Bearer logout")
 	}
 }

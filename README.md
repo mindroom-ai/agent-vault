@@ -120,13 +120,13 @@ export AGENT_VAULT_OAUTH_GITHUB_CLIENT_ID=your-github-app-client-id
 export AGENT_VAULT_OAUTH_GITHUB_CLIENT_SECRET=your-github-app-client-secret
 ```
 
-Register `{AGENT_VAULT_ADDR}{AGENT_VAULT_UI_BASE_PATH}/v1/oauth/callback` with each provider, omitting the middle value when the UI uses `/`. Vault users can then choose **Google (managed)** or **GitHub (managed)** and authorize separate accounts without creating or entering OAuth client credentials. Google users select OAuth scopes. GitHub App user authorization sends no classic OAuth scopes; effective access is the intersection of the app installation, the app's configured permissions, and the user's own access.
+Register `{AGENT_VAULT_ADDR}/v1/oauth/callback` with each provider. Vault users can then choose **Google (managed)** or **GitHub (managed)** and authorize separate accounts without creating or entering OAuth client credentials. Google users select OAuth scopes. GitHub App user authorization sends no classic OAuth scopes; effective access is the intersection of the app installation, the app's configured permissions, and the user's own access.
 
 Access and refresh tokens stay encrypted and isolated per vault, while shared client secrets remain operator-managed and are resolved at runtime. The GitHub user access token is injected as a bearer token for `api.github.com`. If an existing Git smart-HTTP service references the same credential key (the UI defaults to `GITHUB_TOKEN`), it uses that user token in place of the previous PAT without a new transport. Agent Vault configuration alone does not change downstream tools or deployments.
 
 The server starts the HTTP API on port `14321` and a transparent HTTP/HTTPS proxy on port `14322`; the same listener handles `CONNECT` for `https://` upstreams and absolute-form forward-proxy requests for `http://` upstreams.
 
-The web UI becomes available at `http://<host>:14321` and you'll be prompted to create the first user known as the instance **owner**. To mount it below a reverse-proxy prefix without rewriting responses, set `AGENT_VAULT_UI_BASE_PATH=/vault` and route `/vault/` to the management listener unchanged. The UI, assets, browser API calls, deep links, invitations, approvals, OAuth callbacks, and browser session cookie then use `/vault`; root control API endpoints and the separate proxy listener keep their existing addresses. `vault` and `/vault/` normalize to `/vault`, while invalid external or traversing values prevent startup.
+The web UI becomes available at `http://<host>:14321` and you'll be prompted to create the first user known as the instance **owner**.
 
 2. Create a [vault](https://docs.agent-vault.dev/learn/vaults), input your [credentials](https://docs.agent-vault.dev/learn/credentials), and configure [service rules](https://docs.agent-vault.dev/learn/services) in Agent Vault either through the management UI or via CLI on the Agent Vault machine. For example, you can create a credential for `ANTHROPIC_API_KEY` and create a service rule for Agent Vault to substitute a dummy value `__anthropic_api_key__` for the real key.
 
@@ -196,6 +196,7 @@ Want a full deployment walkthrough? See [Run Hermes on a VPS](https://docs.agent
 
 - You should deploy Agent Vault as a separate service on a different host machine from your AI agents to prevent agents from exploiting a shared host to gain access to Agent Vault.
 - You should keep the proxy port (14322 by default), where credentials get injected into outbound requests, private to your agents' network. The management interface on 14321 is safer to expose if you need remote admin, but still harden it like any production web service (TLS, IP allowlist). Refer to [examples/nginx-public-ui-proxy/](examples/nginx-public-ui-proxy/) for a working example.
+- To share a domain with other services, start the server with `--ui-base-path /vault` (env `AGENT_VAULT_UI_BASE_PATH`). The browser UI and its API calls use the prefix, while root `/v1` and `/discover` control APIs remain available. The reverse proxy passes paths through without rewriting. See [Serving under a path prefix](https://docs.agent-vault.dev/self-hosting/path-prefix).
 
 2. Latency: You should co-locate Agent Vault alongside your AI agents within the same network to reduce request latency.
 

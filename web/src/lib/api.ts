@@ -1,4 +1,4 @@
-import { uiURL } from "./basePath";
+import { basePath, joinBasePath } from "./basePath";
 
 export class ApiError extends Error {
   status: number;
@@ -16,7 +16,7 @@ export async function apiFetch(
   url: string,
   options?: RequestInit,
 ): Promise<Response> {
-  return fetch(uiURL(url), {
+  return fetch(joinBasePath(basePath, url), {
     ...options,
     headers: {
       "Content-Type": "application/json",

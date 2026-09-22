@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io/fs"
 	"net/http"
 	"os"
 	"time"
@@ -57,19 +56,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
-// handleSPA serves the SPA index.html for client-side routing.
+// handleSPA serves the SPA index.html for client-side routing. The bytes
+// are templated once at startup (see injectBasePath) so the <base href>
+// reflects the configured UI base path.
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
-	indexHTML, err := fs.ReadFile(webDistFS, "webdist/index.html")
-	if err != nil {
+	if s.indexHTML == nil {
 		http.Error(w, "Frontend not built", http.StatusInternalServerError)
-		return
-	}
-	indexHTML, err = renderSPAIndex(indexHTML, s.uiBasePath)
-	if err != nil {
-		http.Error(w, "Frontend build is incompatible", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(indexHTML)
+	_, _ = w.Write(s.indexHTML)
 }
